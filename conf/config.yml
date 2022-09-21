@@ -1,0 +1,42 @@
+# server config information
+server:
+  mode: release # debug,release
+  host: 0.0.0.0
+  port: 7023
+  enable_https: false  # https
+  cert_file: conf/https/app.crt  # https
+  key_file: conf/https/app.key # https
+  docs_api: 127.0.0.1:7023 #docs api request address(explorer)
+  base_url: /api/v2/logo/
+
+centrifugo:
+  enable: true  #
+  secret: "0512c5b9-a9a1-4480-88fd-f121a9ce0051"  #
+  url: "http://127.0.0.1:8001" # address
+  socket: "ws://192.168.1.191:8001/connection/websocket" # address
+  key: "bbae59c1-5c3e-461e-a2d6-8254ab8eea3e" #
+
+database:
+  enable: true #
+  max_idle: 10 # max idle connections
+  max_open: 100  #max open connections
+  type: postgres # postgres
+  name: ibax #must be connect dbname params sync
+  ver: 20200902 #
+  connect: host=127.0.0.1 port=5432 user=postgres dbname=ibax sslmode=disable password=123456
+
+# redis config information
+redis:
+  enable: true  #
+  address: 127.0.0.1 # address
+  port: 6379       # address
+  password: # password
+  db: 4 #db
+
+crontab:
+  real_time: "0/4 * * * * ?" #real time data
+  delay: "0/20 * * * * ?" #delay time data
+
+crypto_settings:
+  cryptoer: "ECC_Secp256k1"
+  hasher: "KECCAK256"

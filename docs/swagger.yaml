@@ -1,0 +1,109 @@
+definitions:
+  api.EcosystemList:
+    properties:
+      emission_amount:
+        type: string
+      id:
+        type: integer
+      info:
+        type: string
+      isValued:
+        type: integer
+      member:
+        type: integer
+      name:
+        type: string
+      status:
+        description: 0:Not joined 1:join
+        type: integer
+      token_symbol:
+        type: string
+      type_emission:
+        type: integer
+      type_withdraw:
+        type: integer
+    type: object
+  api.EcosystemListResult:
+    properties:
+      limit:
+        type: integer
+      page:
+        type: integer
+      rets:
+        items:
+          $ref: '#/definitions/api.EcosystemList'
+        type: array
+      total:
+        type: integer
+    type: object
+  api.Response:
+    properties:
+      code:
+        type: integer
+      data:
+        type: any
+      message:
+        type: string
+    type: object
+  api.findEcosystem:
+    properties:
+      limit:
+        description: Find the number of limit
+        example: 10
+        type: integer
+      order:
+        description: order by
+        example: id asc
+        type: string
+      page:
+        description: Find the number of pages
+        example: 1
+        type: integer
+      search:
+        type: any
+      wallet:
+        description: wallet address
+        example: xxxx-xxxx-xxxx-xxxx-xxxx
+        type: string
+      where:
+        additionalProperties:
+          type: any
+        description: sql where,example:Find id = 2 "where":{"id =":2}
+        type: object
+    type: object
+info:
+  contact: {}
+paths:
+  /api/v1/eco_libs:
+    post:
+      consumes:
+      - application/json
+      description: get dashboard user ecosystem list
+      parameters:
+      - description: params
+        in: body
+        name: params
+        required: true
+        schema:
+          allOf:
+          - $ref: '#/definitions/api.findEcosystem'
+          - properties:
+              search:
+                type: string
+            type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/api.EcosystemListResult'
+              type: object
+      summary: get all ecosystem list
+      tags:
+      - accounts
+swagger: "2.0"

@@ -1,0 +1,173 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "contact": {}
+    },
+    "paths": {
+        "/api/v1/eco_libs": {
+            "post": {
+                "description": "get dashboard user ecosystem list",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "accounts"
+                ],
+                "summary": "get all ecosystem list",
+                "parameters": [
+                    {
+                        "description": "params",
+                        "name": "params",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.findEcosystem"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "search": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/api.EcosystemListResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "api.EcosystemList": {
+            "type": "object",
+            "properties": {
+                "emission_amount": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "info": {
+                    "type": "string"
+                },
+                "isValued": {
+                    "type": "integer"
+                },
+                "member": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "0:Not joined 1:join",
+                    "type": "integer"
+                },
+                "token_symbol": {
+                    "type": "string"
+                },
+                "type_emission": {
+                    "type": "integer"
+                },
+                "type_withdraw": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.EcosystemListResult": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "rets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.EcosystemList"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.Response": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "type": "any"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.findEcosystem": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "description": "Find the number of limit",
+                    "type": "integer",
+                    "example": 10
+                },
+                "order": {
+                    "description": "order by",
+                    "type": "string",
+                    "example": "id asc"
+                },
+                "page": {
+                    "description": "Find the number of pages",
+                    "type": "integer",
+                    "example": 1
+                },
+                "search": {
+                    "type": "any"
+                },
+                "wallet": {
+                    "description": "wallet address",
+                    "type": "string",
+                    "example": "xxxx-xxxx-xxxx-xxxx-xxxx"
+                },
+                "where": {
+                    "description": "sql where,example:Find id = 2 \"where\":{\"id =\":2}",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "any"
+                    }
+                }
+            }
+        }
+    }
+}
