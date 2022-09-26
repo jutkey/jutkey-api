@@ -69,7 +69,7 @@ func monthHistoryTotalHandler(c *gin.Context) {
 		return
 	}
 	rets.List = list
-	rets.TokenSymbol, _ = sql.GetEcosystemTokenSymbol(req.Ecosystem)
+	rets.TokenSymbol = sql.Tokens.Get(req.Ecosystem)
 
 	ret.Return(&rets, CodeSuccess)
 	JsonResponse(c, ret)

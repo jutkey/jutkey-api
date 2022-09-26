@@ -22,6 +22,11 @@ type SpentInfo struct {
 	Action       string `gorm:"-"` // UTXO operation control : change
 }
 
+const (
+	UtxoTx       = "UTXO_Tx"
+	UtxoTransfer = "UTXO_Transfer"
+)
+
 // TableName returns name of table
 func (si *SpentInfo) TableName() string {
 	return "spent_info"
@@ -80,4 +85,45 @@ func GetUtxoInput(keyId int64, search []int64) (*[]UtxoInputResponse, error) {
 	}
 
 	return &rets, nil
+}
+
+func (si *SpentInfo) GetOutputs(txHash []byte) (list []SpentInfo, err error) {
+	err = GetDB(nil).Table(si.TableName()).
+		Where("output_tx_hash = ?", txHash).Order("output_index ASC").Find(&list).Error
+	return
+}
+
+func (si *SpentInfo) GetLast() (bool, error) {
+	return isFound(GetDB(nil).Order("block_id desc").Take(si))
+}
+
+func (si *SpentInfo) GetFirst(blockId int64) (bool, error) {
+	return isFound(GetDB(nil).Order("block_id asc").Where("block_id > ?", blockId).Take(si))
+}
+
+func getSpentInfoHashList(stId, endId int64) (*[]spentInfoTxData, error) {
+	var (
+		err error
+	)
+	var rlt []spentInfoTxData
+
+	err = GetDB(nil).Raw(`
+SELECT v1.block_id,v1.output_tx_hash,v2.time,v2.data FROM(
+	SELECT output_tx_hash,block_id FROM spent_info WHERE block_id >= ? AND block_id < ? GROUP BY output_tx_hash,block_id ORDER BY block_id asc
+)AS v1
+LEFT JOIN(
+	SELECT id,time,data FROM block_chain
+)AS v2 ON(v2.id = v1.block_id)
+ `, stId, endId).Find(&rlt).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return &rlt, nil
+}
+
+func (p *SpentInfo) GetOutputKeysByBlockId(blockId int64) (outputKeys []SpentInfo, err error) {
+	err = GetDB(nil).Select("output_key_id,ecosystem").Table(p.TableName()).
+		Where("block_id = ?", blockId).Group("output_key_id,ecosystem").Find(&outputKeys).Error
+	return
 }

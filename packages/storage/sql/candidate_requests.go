@@ -64,12 +64,15 @@ func (p *CandidateNodeRequests) GetPubKeyById(id int64) (bool, error) {
 }
 
 func InitPledgeAmount() {
-	pledgeAmount, err := sqldb.GetPledgeAmount()
-	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Error("init Pledge Amount Failed")
-		return
+	if NodeReady {
+		pledgeAmount, err := sqldb.GetPledgeAmount()
+		if err != nil {
+			log.WithFields(log.Fields{"error": err}).Error("init Pledge Amount Failed")
+			return
+		}
+
+		PledgeAmount = pledgeAmount
 	}
-	PledgeAmount = pledgeAmount
 }
 
 func NodeListSearch(page, limit int, order, wallet string) (*GeneralResponse, error) {
@@ -220,7 +223,7 @@ func (p *nodeDetailInfo) getNodeDetailInfo(voteTotal decimal.Decimal, account st
 
 func CandidateTableExist() bool {
 	var p CandidateNodeRequests
-	if !HasTableOrView(nil, p.TableName()) {
+	if !HasTableOrView(p.TableName()) {
 		return false
 	}
 	return true

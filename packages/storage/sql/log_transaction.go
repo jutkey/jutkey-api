@@ -13,3 +13,7 @@ type LogTransaction struct {
 func (m LogTransaction) TableName() string {
 	return `log_transactions`
 }
+
+func (lt *LogTransaction) GetByHash(hash []byte) (bool, error) {
+	return isFound(GetDB(nil).Where("hash = ?", hash).First(lt))
+}

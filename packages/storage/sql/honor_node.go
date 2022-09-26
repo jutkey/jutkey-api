@@ -214,7 +214,7 @@ func syncNodeDisplayStatus(nodeValue []NodeValue) {
 		p    HonorNodeInfo
 		list []HonorNodeInfo
 	)
-	if !HasTableOrView(nil, p.TableName()) {
+	if !HasTableOrView(p.TableName()) {
 		return
 	}
 	if err := GetDB(nil).Table(p.TableName()).Select("id,value,display").Order("id desc").Find(&list).Error; err != nil {

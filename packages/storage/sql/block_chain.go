@@ -46,3 +46,7 @@ func (b *Block) GetSystemTime() (int64, error) {
 	}
 	return 0, err
 }
+
+func (b *Block) GetId(blockId int64) (bool, error) {
+	return isFound(GetDB(nil).Where("id = ?", blockId).First(b))
+}

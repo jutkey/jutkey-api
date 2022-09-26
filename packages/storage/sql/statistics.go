@@ -17,31 +17,7 @@ type Statistics struct {
 	NftMinerStaking string `json:"nftMinerStaking"`
 }
 
-var getStatistics chan bool
-
-func SendStatisticsSignal() {
-	select {
-	case getStatistics <- true:
-	default:
-		//fmt.Printf("Get Transaction Data len:%d,cap:%d\n", len(getTransactionData), cap(getTransactionData))
-	}
-}
-
-func StatisticsSignalReceive() {
-	if getStatistics == nil {
-		getStatistics = make(chan bool)
-	}
-	for {
-		select {
-		case <-getStatistics:
-			if err := getStatisticsData(); err != nil {
-				log.WithFields(log.Fields{"error": err}).Error("get Statistics Data Failed")
-			}
-		}
-	}
-}
-
-func getStatisticsData() error {
+func GetStatisticsData() error {
 	var data Statistics
 	tm, err := GetTotalAmount(1)
 	if err != nil {
@@ -79,6 +55,7 @@ func getStatisticsData() error {
 	if err != nil {
 		return err
 	}
+
 	err = ParseChannel(ChannelDashboard, CmdStatistical, &data)
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Error("Send Websocket Statistics Data Failed")
@@ -173,4 +150,9 @@ func GetAllSystemCount() (int64, error) {
 
 func (p *Statistics) SendWebsocket(channel string, cmd string) error {
 	return SendDataToWebsocket(channel, cmd, p)
+}
+
+func InitGlobalSwitch() {
+	NodeReady = CandidateTableExist()
+	NftMinerReady = NftMinerTableIsExist()
 }

@@ -4,12 +4,21 @@ import (
 	"github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
 	"jutkey-server/conf"
-	"jutkey-server/packages/storage/sql"
+	"time"
+)
+
+var (
+	cr crontab
 )
 
 func CreateCrontab() {
 	crontabInfo := conf.GetEnvConf().Crontab
-	initCrontabTask()
+
+	go cr.crontabMain()
+	time.Sleep(1 * time.Second)
+	cr.sendCrontabCmd(realTime)
+	cr.sendCrontabCmd(delay)
+
 	if crontabInfo != nil {
 		go createCrontabFromRealTime(crontabInfo.RealTime)
 		go createCrontabFromDelay(crontabInfo.Delay)
@@ -26,7 +35,7 @@ func newWithSecond() *cron.Cron {
 func createCrontabFromRealTime(timeSet string) {
 	c := newWithSecond()
 	_, err := c.AddFunc(timeSet, func() {
-		realTimeDataTask()
+		cr.sendCrontabCmd(realTime)
 	})
 	if err != nil {
 		log.WithFields(log.Fields{"error": err, "time set": timeSet}).Error("create Crontab From real Time Add Function Failed")
@@ -37,31 +46,10 @@ func createCrontabFromRealTime(timeSet string) {
 func createCrontabFromDelay(timeSet string) {
 	c := newWithSecond()
 	_, err := c.AddFunc(timeSet, func() {
-		delayDataTask()
+		cr.sendCrontabCmd(delay)
 	})
 	if err != nil {
 		log.WithFields(log.Fields{"error": err, "time set": timeSet}).Error("create Crontab From delay Add Function Failed")
 	}
 	c.Start()
-}
-
-func initCrontabTask() {
-	realTimeDataTask()
-	delayDataTask()
-}
-
-func realTimeDataTask() {
-	go sql.InitPledgeAmount()
-	go sql.UpdateHonorNodeInfo()
-	go initGlobalSwitch()
-	go sql.SendStatisticsSignal()
-}
-
-func delayDataTask() {
-	go sql.GetHonorNode()
-}
-
-func initGlobalSwitch() {
-	sql.NodeReady = sql.CandidateTableExist()
-	sql.NftMinerReady = sql.NftMinerTableIsExist()
 }

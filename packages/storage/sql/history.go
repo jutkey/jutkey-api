@@ -1,16 +1,12 @@
 package sql
 
 import (
-	"encoding/hex"
 	"errors"
-	"github.com/IBAX-io/go-ibax/packages/consts"
+	"fmt"
 	"github.com/IBAX-io/go-ibax/packages/converter"
-	"github.com/IBAX-io/go-ibax/packages/storage/sqldb"
 	"github.com/shopspring/decimal"
-	log "github.com/sirupsen/logrus"
-	"jutkey-server/conf"
+	"gorm.io/gorm"
 	"jutkey-server/packages/params"
-	"strconv"
 	"time"
 )
 
@@ -36,8 +32,8 @@ type WalletHistoryHex struct {
 	Transaction int64           `json:"transaction"`
 	InTx        int64           `json:"in_tx"`
 	OutTx       int64           `json:"out_tx"`
-	Inamount    decimal.Decimal `json:"inamount"`
-	Outamount   decimal.Decimal `json:"outamount"`
+	InAmount    decimal.Decimal `json:"inamount"`
+	OutAmount   decimal.Decimal `json:"outamount"`
 	Amount      decimal.Decimal `json:"amount,omitempty"`
 }
 
@@ -50,62 +46,124 @@ func (th *History) GetMonthFind(req *params.HistoryFindForm) (*WalletMonthDetail
 	if req.Time <= 0 {
 		return nil, errors.New("invalid request parameter time")
 	}
-	rs := new([]History)
 	var rets WalletMonthDetailResponse
 	rets.Limit = req.Limit
 	rets.Page = req.Page
 	kid := converter.StringToAddress(req.Wallet)
-	stTime := req.Time
-	te := time.Unix(req.Time, 0).AddDate(0, 1, 0).Unix()
-	if err := GetDB(nil).Table(th.TableName()).
-		Where("(sender_id = ? or recipient_id = ? ) and ecosystem = ? and created_at >= ? and created_at < ?",
-			kid, kid, req.Ecosystem, time.Unix(stTime, 0).UnixMilli(), time.Unix(te, 0).UnixMilli()).
-		Count(&rets.Total).Error; err != nil {
-		return nil, err
-	}
-	if err := GetDB(nil).Where("(sender_id = ? or recipient_id = ? ) and ecosystem = ? and created_at >= ? and created_at < ?",
-		kid, kid, req.Ecosystem, time.Unix(stTime, 0).UnixMilli(), time.Unix(te, 0).UnixMilli()).
-		Order(req.Order).
-		Offset((req.Page - 1) * req.Limit).
-		Limit(req.Limit).
-		Find(rs).Error; err != nil {
+	stTime := time.Unix(req.Time, 0)
+	edTime := stTime.AddDate(0, 1, 0)
+
+	err := GetDB(nil).Raw(`
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo,sender_balance,recipient_balance FROM "1_history"
+		WHERE ecosystem = ? AND (sender_id = ? or recipient_id = ?) and created_at >= ? and created_at < ?
+				union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo,sender_balance,recipient_balance FROM utxo_history 
+	WHERE type <> 1 AND ecosystem = ? AND (sender_id = ? or recipient_id = ?) and created_at >= ? and created_at < ?
+)AS v1
+`, req.Ecosystem, kid, kid, stTime.UnixMilli(), edTime.UnixMilli(),
+		req.Ecosystem, kid, kid, stTime.Unix(), edTime.Unix()).Take(&rets.Total).Error
+	if err != nil {
 		return nil, err
 	}
 
-	rets.List = *th.ChangeMonthResults(rs, kid)
-	rets.TokenSymbol, _ = GetEcosystemTokenSymbol(req.Ecosystem)
+	var list []historyMonthRet
+	err = GetDB(nil).Raw(`
+SELECT v1.block,v1.hash,v1.sender_id,v1.recipient_id,v1.type,v1.created_at,v1.amount,v1.isutxo,
+	CASE WHEN v1.isutxo THEN
+		v1.sender_balance+COALESCE((
+			SELECT CASE WHEN sender_id = v1.sender_id THEN
+				sender_balance
+			ELSE
+				recipient_balance
+			END AS balance
+			FROM "1_history" 
+			WHERE(recipient_id = v1.sender_id OR sender_id = v1.sender_id) AND ecosystem = ? AND block_id <= v1.block ORDER BY id DESC LIMIT 1
+		),0)
+	ELSE
+		v1.sender_balance+COALESCE((
+			SELECT CASE WHEN sender_id = v1.sender_id THEN
+				sender_balance
+			ELSE
+				recipient_balance
+			END AS balance
+			FROM utxo_history 
+			WHERE(recipient_id = v1.sender_id OR sender_id = v1.sender_id) AND ecosystem = ? AND block <= v1.block ORDER BY id DESC LIMIT 1
+		),0)
+	END AS sender_balance,
+
+	CASE WHEN v1.isutxo THEN
+		v1.recipient_balance+COALESCE((
+			SELECT CASE WHEN sender_id = v1.recipient_id THEN
+				sender_balance
+			ELSE
+				recipient_balance
+			END AS balance
+			FROM "1_history" 
+			WHERE(recipient_id = v1.recipient_id OR sender_id = v1.recipient_id) AND ecosystem = ? AND block_id <= v1.block ORDER BY id DESC LIMIT 1
+		),0)
+	ELSE
+		v1.recipient_balance+COALESCE((
+			SELECT CASE WHEN sender_id = v1.recipient_id THEN
+				sender_balance
+			ELSE
+				recipient_balance
+			END AS balance
+			FROM utxo_history 
+			WHERE(recipient_id = v1.recipient_id OR sender_id = v1.recipient_id) AND ecosystem = ? AND block <= v1.block ORDER BY id DESC LIMIT 1
+		),0)
+	END AS recipient_balance 
+FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo,sender_balance,recipient_balance FROM "1_history"
+	WHERE ecosystem = ? AND (sender_id = ? or recipient_id = ?) and created_at >= ? and created_at < ?
+			union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo,sender_balance,recipient_balance FROM utxo_history 
+	WHERE type <> 1 AND ecosystem = ? AND (sender_id = ? or recipient_id = ?) and created_at >= ? and created_at < ?
+	ORDER BY block DESC
+
+	OFFSET ? LIMIT ?
+)AS v1
+`, req.Ecosystem, req.Ecosystem, req.Ecosystem, req.Ecosystem,
+		req.Ecosystem, kid, kid, stTime.UnixMilli(), edTime.UnixMilli(),
+		req.Ecosystem, kid, kid, stTime.Unix(), edTime.Unix(),
+		(req.Page-1)*req.Limit, req.Limit).Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+
+	rets.List = *th.ChangeMonthResults(&list, kid)
+	rets.TokenSymbol = Tokens.Get(req.Ecosystem)
 
 	return &rets, nil
 }
 
-func (th *History) ChangeMonthResults(vers *[]History, kid int64) *[]HistoryMonthRet {
-	var dats []HistoryMonthRet
-	for _, t := range *vers {
+func (th *History) ChangeMonthResults(vers *[]historyMonthRet, kid int64) *[]MonthHistoryResponse {
+	var dats []MonthHistoryResponse
+	for k, t := range *vers {
 		s := t.ChangeMonthResult(kid)
+		s.ID = int64(k) + 1
 		dats = append(dats, *s)
 	}
 	return &dats
 }
 
-func (th *History) ChangeMonthResult(kid int64) *HistoryMonthRet {
+func (th *historyMonthRet) ChangeMonthResult(kid int64) *MonthHistoryResponse {
 	var balance string
 	if kid == th.SenderId {
-		balance = th.SenderBalance.String()
+		balance = th.SenderBalance
 	} else if kid == th.RecipientId {
-		balance = th.RecipientBalance.String()
+		balance = th.RecipientBalance
 	}
-	s := HistoryMonthRet{
-		Ecosystem: th.Ecosystem,
-		ID:        th.ID,
-		Sender:    converter.AddressToString(th.SenderId),
-		Recipient: converter.AddressToString(th.RecipientId),
-		Balance:   balance,
-		Amount:    th.Amount.String(),
-		Comment:   th.Comment,
-		BlockId:   th.BlockId,
-		TxHash:    hex.EncodeToString(th.Txhash),
-		Time:      MsToSeconds(th.CreatedAt),
-		Type:      th.Type,
+	var txTime int64
+	if th.Isutxo {
+		txTime = th.CreatedAt
+	} else {
+		txTime = MsToSeconds(th.CreatedAt)
+	}
+	s := MonthHistoryResponse{
+		Balance: balance,
+		Amount:  th.Amount,
+		Time:    txTime,
 	}
 	return &s
 }
@@ -134,199 +192,235 @@ func (th *History) GetWalletMonthHistoryTotals(eid, kid int64, month int) ([]Wal
 	return list, err
 }
 
-func (th *History) GetWalletMonthHistory(eid, keyid, t1, t2 int64) (*WalletMonthHistory, error) {
-	var (
-		ret    WalletMonthHistory
-		scount int64
-		rcount int64
-		in     string
-		out    string
-		err    error
-	)
-
-	err = GetDB(nil).Table("1_history").
-		Where("recipient_id = ? and ecosystem = ? and type != ? and created_at >= ? and created_at < ?", keyid, eid, 13, t1, t2).
-		Count(&rcount).Error
-	if err != nil {
-		return &ret, err
-	}
-	if rcount > 0 {
-		err = GetDB(nil).Table("1_history").Select("sum(amount)").Where("recipient_id = ? and ecosystem = ? and type != ? and created_at >= ? and created_at < ?", keyid, eid, 13, t1, t2).Row().Scan(&in)
-		if err != nil {
-			return &ret, err
-		}
-	} else {
-		in = "0"
-	}
-
-	err = GetDB(nil).Table("1_history").
-		Where("sender_id = ? and ecosystem = ? and type != ? and created_at >= ? and created_at < ?", keyid, eid, 13, t1, t2).
-		Count(&scount).Error
-	if err != nil {
-		return &ret, err
-	}
-	if scount > 0 {
-		err = GetDB(nil).Table("1_history").Select("sum(amount)").Where("sender_id = ? and ecosystem = ? and type != ? and created_at >= ? and created_at < ?", keyid, eid, 13, t1, t2).Row().Scan(&out)
-		if err != nil {
-			return &ret, err
-		}
-	} else {
-		out = "0"
-	}
-
-	din, err := decimal.NewFromString(in)
-	if err != nil {
-		return &ret, err
-	}
-	dout, err := decimal.NewFromString(out)
-	if err != nil {
-		return &ret, err
-	}
-
-	ret.OutCount = scount
-	ret.OutAmount = dout
-	ret.InCount = rcount
-	ret.InAmount = din
-
-	return &ret, err
-}
-
-func (th *History) GetDBDayNftInComeinfo(kid, t1, t2 int64) (string, error) {
+func (th *History) GetDBDayNftInComeinfo(kid, t1, t2 int64) (decimal.Decimal, error) {
 	type allAmount struct {
-		Amounts string `gorm:"column:amounts"`
+		Amounts decimal.Decimal `gorm:"column:amounts"`
 	}
 	var at allAmount
 	err := GetDB(nil).Table(th.TableName()).Select("sum(amount) amounts").Where(`type = ? and recipient_id = ? and created_at >= ? and created_at < ?`, 12, kid, t1, t2).Take(&at).Error
 	//.Row().Scan(&allAmount)
 
 	if err != nil {
-		return "", err
+		return decimal.Zero, err
 	}
 	return at.Amounts, err
 }
 
 func (th *History) GetList(c *params.MineHistoryRequest) (*GeneralResponse, error) {
-	var rets GeneralResponse
-	var list []map[string]string
+	var (
+		rets   GeneralResponse
+		txList []AccountTxHistory
+	)
+	type accountHistory struct {
+		Block int64
+		//Hash         []byte
+		Address      int64
+		SenderId     int64
+		RecipientId  int64
+		Type         int
+		CreatedAt    int64
+		Amount       string
+		Isutxo       bool
+		ContractName string
+	}
+	var list []accountHistory
+	if !CheckSql(c.Order) {
+		return nil, errors.New("request params invalid")
+	}
+
 	kid := converter.StringToAddress(c.Wallet)
-	q := GetDB(nil).Table(th.TableName()).Select("id,sender_id,recipient_id,created_at,status,block_id,type,ecosystem,txhash,amount").Where("ecosystem = ?", c.Ecosystem)
+	if kid == 0 && c.Wallet != "0000-0000-0000-0000-0000" {
+		return nil, errors.New("account invalid")
+	}
+	countQuery := fmt.Sprintf(`
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history"  WHERE ecosystem = %d
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1 AND ecosystem = %d
+	ORDER BY %s
+)AS v1
+LEFT JOIN(
+	SELECT contract_name,hash,address FROM log_transactions
+)AS v2 ON(v2.hash = v1.hash)
+
+WHERE
+`, c.Ecosystem, c.Ecosystem, c.Order)
+
+	sqlQuery := fmt.Sprintf(`
+SELECT v1.*,v2.contract_name,v2.address FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history"  WHERE ecosystem = %d
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1 AND ecosystem = %d
+	ORDER BY %s
+)AS v1
+LEFT JOIN(
+	SELECT contract_name,hash,address FROM log_transactions
+)AS v2 ON(v2.hash = v1.hash)
+
+WHERE
+`, c.Ecosystem, c.Ecosystem, c.Order)
+	var q1 *gorm.DB
+	var q2 *gorm.DB
 	switch c.Opt {
 	case "send":
-		q = q.Where("sender_id = ?", kid)
+		q1 = GetDB(nil).Raw(countQuery+" sender_id = ?", kid)
+		q2 = GetDB(nil).Raw(sqlQuery+" sender_id = ? OFFSET ? LIMIT ?", kid, (c.Page-1)*c.Limit, c.Limit)
 	case "recipient":
-		q = q.Where("recipient_id = ?", kid)
+		q1 = GetDB(nil).Raw(countQuery+" recipient_id = ?", kid)
+		q2 = GetDB(nil).Raw(sqlQuery+" recipient_id = ? OFFSET ? LIMIT ?", kid, (c.Page-1)*c.Limit, c.Limit)
 	case "all":
-		q = q.Where("recipient_id = ? OR sender_id = ? ", kid, kid)
+		q1 = GetDB(nil).Raw(countQuery+" recipient_id = ? OR sender_id = ?", kid, kid)
+		q2 = GetDB(nil).Raw(sqlQuery+" recipient_id = ? OR sender_id = ? OFFSET ? LIMIT ?", kid, kid, (c.Page-1)*c.Limit, c.Limit)
 	}
-	err := q.Count(&rets.Total).Error
-	if err != nil {
-		return nil, err
-	}
-	q = q.Order(c.Order)
-	rows, err := q.Offset((c.Page - 1) * c.Limit).Limit(c.Limit).Rows()
-	if err != nil {
-		return nil, err
-	}
-	list, err = sqldb.GetNodeResult(rows)
-	if err != nil {
-		return nil, err
-	}
-	tokenSymbol, _ := GetEcosystemTokenSymbol(c.Ecosystem)
 
-	for key, val := range list {
-		list[key]["token_symbol"] = tokenSymbol
-		if createdAt, ok := val["created_at"]; ok {
-			t1, _ := strconv.ParseInt(createdAt, 10, 64)
-			t2 := strconv.FormatInt(MsToSeconds(t1), 10)
-			list[key]["created_at"] = t2
-		}
-		if keyIdStr, ok := val["sender_id"]; ok {
-			keyId, _ := strconv.ParseInt(keyIdStr, 10, 64)
-			wallet := converter.AddressToString(keyId)
-			delete(list[key], "sender_id")
-			list[key]["sender"] = wallet
-			if wallet != c.Wallet {
-				list[key]["address"] = wallet
-			}
-		}
-		if keyIdStr, ok := val["recipient_id"]; ok {
-			keyId, _ := strconv.ParseInt(keyIdStr, 10, 64)
-			wallet := converter.AddressToString(keyId)
-			delete(list[key], "recipient_id")
-			list[key]["recipient"] = wallet
-			if wallet != c.Wallet {
-				list[key]["address"] = wallet
-			}
-		}
-		if _, ok := list[key]["address"]; !ok {
-			list[key]["address"] = c.Wallet
-		}
-
-		if hashStr, ok := val["txhash"]; ok {
-			delete(list[key], "txhash")
-			hash, _ := hex.DecodeString(hashStr)
-			list[key]["contract"] = GetContractName(hash)
-		}
+	err := q1.Take(&rets.Total).Error
+	if err != nil {
+		return nil, err
 	}
-	rets.List = list
+	err = q2.Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+
+	tokenSymbol := Tokens.Get(c.Ecosystem)
+
+	for k, val := range list {
+		var rlt AccountTxHistory
+		rlt.Address = converter.AddressToString(val.Address)
+		rlt.Sender = converter.AddressToString(val.SenderId)
+		rlt.Recipient = converter.AddressToString(val.RecipientId)
+		rlt.BlockId = val.Block
+		rlt.TokenSymbol = tokenSymbol
+		rlt.Amount = val.Amount
+		if val.Isutxo {
+			rlt.Type = compatibleContractAccountType(val.Type)
+			rlt.CreatedAt = val.CreatedAt
+			rlt.Contract = parseSpentInfoHistoryType(val.Type)
+		} else {
+			rlt.Type = val.Type
+			rlt.CreatedAt = MsToSeconds(val.CreatedAt)
+			rlt.Contract = val.ContractName
+		}
+		rlt.Id = k + 1
+
+		txList = append(txList, rlt)
+	}
+	rets.List = txList
 	rets.Page = c.Page
 	rets.Limit = c.Limit
 	return &rets, nil
 }
 
-func (th *History) GetAccountHistoryTotals(id int64, keyId int64) (*WalletHistoryHex, error) {
+func (th *History) GetWalletMonthHistory(eid, keyId, t1, t2 int64) (*WalletMonthHistory, error) {
 	var (
-		ret    WalletHistoryHex
-		scount int64
-		rcount int64
+		ret    WalletMonthHistory
+		sCount int64
+		rCount int64
 		in     string
 		out    string
 		err    error
 	)
 
-	err = conf.GetDbConn().Conn().Table("1_history").
-		Where("recipient_id = ? and ecosystem = ?", keyId, id).
-		Count(&rcount).Error
+	rCount, sCount, err = getAccountTxCount(eid, keyId, t1, t2)
 	if err != nil {
-		return &ret, err
+		return nil, err
 	}
-	if rcount > 0 {
-		err = conf.GetDbConn().Conn().Table("1_history").Select("sum(amount)").Where("recipient_id = ? and ecosystem = ?", keyId, id).Row().Scan(&in)
+
+	if rCount > 0 {
+		err = GetDB(nil).Raw(`
+SELECT COALESCE(sum(amount),0)+
+	(SELECT COALESCE(sum(amount),0) FROM utxo_history WHERE 
+	recipient_id = ? AND ecosystem = ? AND type <> 1 AND created_at >= ? AND created_at < ?)AS in_amount 
+FROM "1_history" WHERE recipient_id = ? AND ecosystem = ? AND created_at >= ? AND created_at < ?
+`, keyId, eid, time.UnixMilli(t1).Unix(), time.UnixMilli(t2).Unix(), keyId, eid, t1, t2).Row().Scan(&in)
 		if err != nil {
-			return &ret, err
+			return nil, err
 		}
+
 	} else {
 		in = "0"
 	}
 
-	err = conf.GetDbConn().Conn().Table("1_history").
-		Where("sender_id = ? and ecosystem = ?", keyId, id).
-		Count(&scount).Error
-	if err != nil {
-		return &ret, err
-	}
-	if scount > 0 {
-		err = conf.GetDbConn().Conn().Table("1_history").Select("sum(amount)").Where("sender_id = ? and ecosystem = ?", keyId, id).Row().Scan(&out)
+	if sCount > 0 {
+
+		err = GetDB(nil).Raw(`
+SELECT COALESCE(sum(amount),0)+
+	(SELECT COALESCE(sum(amount),0) FROM utxo_history 
+	WHERE sender_id = ? AND ecosystem = ? AND type <> 1 AND created_at >= ? AND created_at < ?)AS out_amount 
+FROM "1_history" WHERE sender_id = ? AND ecosystem = ? AND created_at >= ? AND created_at < ?
+`, keyId, eid, time.UnixMilli(t1).Unix(), time.UnixMilli(t2).Unix(), keyId, eid, t1, t2).Row().Scan(&out)
 		if err != nil {
-			return &ret, err
+			return nil, err
 		}
 	} else {
 		out = "0"
 	}
 
-	din, err := decimal.NewFromString(in)
+	dIn, err := decimal.NewFromString(in)
 	if err != nil {
 		return &ret, err
 	}
-	dout, err := decimal.NewFromString(out)
+	dOut, err := decimal.NewFromString(out)
 	if err != nil {
 		return &ret, err
 	}
-	ret.InTx = rcount
-	ret.OutTx = scount
-	ret.Transaction = scount + rcount
-	ret.Inamount = din
-	ret.Outamount = dout
+
+	ret.OutCount = sCount
+	ret.OutAmount = dOut
+	ret.InCount = rCount
+	ret.InAmount = dIn
+
+	return &ret, err
+}
+
+func (th *History) GetAccountHistoryTotals(id int64, keyId int64) (*WalletHistoryHex, error) {
+	var (
+		ret    WalletHistoryHex
+		sCount int64
+		rCount int64
+		in     = "0"
+		out    = "0"
+		err    error
+	)
+
+	rCount, sCount, err = getAccountTxCount(id, keyId, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	//in amount
+	if rCount > 0 {
+		err = GetDB(nil).Raw(`
+SELECT COALESCE(sum(amount),0)+
+	(SELECT COALESCE(sum(amount),0) FROM utxo_history WHERE recipient_id = ? AND ecosystem = ? AND type <> 1)AS in_amount 
+FROM "1_history" WHERE recipient_id = ? AND ecosystem = ?
+`, keyId, id, keyId, id).Row().Scan(&in)
+		if err != nil {
+			return &ret, err
+		}
+	}
+
+	//out amount
+	if sCount > 0 {
+		err = GetDB(nil).Raw(`
+SELECT COALESCE(sum(amount),0)+
+	(SELECT COALESCE(sum(amount),0) FROM utxo_history WHERE sender_id = ? AND ecosystem = ? AND type <> 1)AS out_amount 
+FROM "1_history" WHERE sender_id = ? AND ecosystem = ?
+`, keyId, id, keyId, id).Row().Scan(&out)
+		if err != nil {
+			return &ret, err
+		}
+	}
+
+	inAmount, _ := decimal.NewFromString(in)
+	outAmount, _ := decimal.NewFromString(out)
+
+	ret.InTx = rCount
+	ret.OutTx = sCount
+
+	ret.Transaction = ret.InTx + ret.OutTx
+	ret.InAmount = inAmount
+	ret.OutAmount = outAmount
 
 	return &ret, err
 }
@@ -339,25 +433,119 @@ func GetAccountHistoryTotal(account string, ecosystem int64) (*AccountHistoryTot
 	if err != nil {
 		return nil, err
 	}
-	rets.InAmount = dh.Inamount.String()
-	rets.OutAmount = dh.Outamount.String()
-	rets.AllAmount = dh.Inamount.Add(dh.Outamount).String()
+	rets.InAmount = dh.InAmount.String()
+	rets.OutAmount = dh.OutAmount.String()
+	rets.AllAmount = dh.InAmount.Add(dh.OutAmount).String()
 	rets.InTx = dh.InTx
 	rets.OutTx = dh.OutTx
 	rets.AllTx = dh.Transaction
-	tokenSymbol, _ := GetEcosystemTokenSymbol(ecosystem)
-	rets.TokenSymbol = tokenSymbol
+	rets.TokenSymbol = Tokens.Get(ecosystem)
 	rets.Ecosystem = ecosystem
 
 	return &rets, nil
 }
 
-func GetContractName(txHash []byte) string {
-	var tx LogTransaction
-	err := GetDB(nil).Select("contract_name").Where("hash = ?", txHash).Take(&tx).Error
-	if err != nil {
-		log.WithFields(log.Fields{"type": consts.ConversionError, "hash": txHash}).Error("Get Contract Name Failed")
-		return ""
+func getAccountTxCount(ecosystem int64, keyId int64, st, ed int64) (inTx, outTx int64, err error) {
+	var (
+		inSqlQuery  string
+		outSqlQuery string
+		q1          *gorm.DB
+		q2          *gorm.DB
+	)
+
+	if ecosystem > 0 {
+		//in out tx
+		inSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history" WHERE ecosystem = ?
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1 AND ecosystem = ?
+)AS v1
+WHERE recipient_id = ?
+`
+		if st > 0 {
+			inSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history" 
+	WHERE ecosystem = ? AND created_at >= ? AND created_at < ?
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history 
+	WHERE type <> 1 AND ecosystem = ? AND created_at >= ? AND created_at < ?
+)AS v1
+WHERE recipient_id = ?
+`
+		}
+
+		outSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history" 
+	WHERE ecosystem = ?
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1 AND ecosystem = ?
+)AS v1
+WHERE sender_id = ?
+`
+		if st > 0 {
+			outSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history" 
+	WHERE ecosystem = ? AND created_at >= ? AND created_at < ?
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history 
+	WHERE type <> 1 AND ecosystem = ? AND created_at >= ? AND created_at < ?
+)AS v1
+WHERE sender_id = ?
+`
+		}
+		if st > 0 {
+			q1 = GetDB(nil).Raw(inSqlQuery, ecosystem, st, ed, ecosystem, time.UnixMilli(st).Unix(), time.UnixMilli(ed).Unix(), keyId)
+			q2 = GetDB(nil).Raw(outSqlQuery, ecosystem, st, ed, ecosystem, time.UnixMilli(st).Unix(), time.UnixMilli(ed).Unix(), keyId)
+		} else {
+			q1 = GetDB(nil).Raw(inSqlQuery, ecosystem, ecosystem, keyId)
+			q2 = GetDB(nil).Raw(outSqlQuery, ecosystem, ecosystem, keyId)
+		}
+	} else {
+		inSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history"
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1
+)AS v1
+WHERE recipient_id = ?
+`
+		outSqlQuery = `
+SELECT count(1) FROM(
+	SELECT block_id AS block,txhash AS hash,sender_id,recipient_id,type,created_at,amount,false AS isutxo FROM "1_history"
+		union all
+	SELECT block,hash,sender_id,recipient_id,type,created_at,amount,true AS isutxo FROM utxo_history WHERE type <> 1
+)AS v1
+WHERE sender_id = ?
+`
+		q1 = GetDB(nil).Raw(inSqlQuery, keyId)
+		q2 = GetDB(nil).Raw(outSqlQuery, keyId)
 	}
-	return tx.ContractName
+	err = q1.Row().Scan(&inTx)
+	if err != nil {
+		return
+	}
+
+	err = q2.Row().Scan(&outTx)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (p *History) GetKeyBalance(keyId int64, ecosystem int64) (balance decimal.Decimal, err error) {
+	err = GetDB(nil).Raw(`
+SELECT CASE WHEN v2.sender_id = v1.key_id THEN
+	COALESCE(v2.sender_balance,0)
+ELSE
+	COALESCE(v2.recipient_balance,0)
+END AS balance
+FROM(
+	SELECT ? AS key_id
+)AS v1 LEFT JOIN "1_history" AS v2 
+ON((v2.recipient_id = v1.key_id OR v2.sender_id = v1.key_id) AND v2.ecosystem = ?)ORDER BY id DESC LIMIT 1`, keyId, ecosystem).Take(&balance).Error
+	return
 }

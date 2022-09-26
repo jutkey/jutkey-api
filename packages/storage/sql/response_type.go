@@ -11,20 +11,6 @@ type NftMinerSummaryResponse struct {
 	StakeAmount   string `json:"stakeAmount"`
 }
 
-type HistoryMonthRet struct {
-	Ecosystem int64  `json:"ecosystem"`
-	ID        int64  `json:"id"`
-	Sender    string `json:"sender"`
-	Recipient string `json:"recipient"`
-	Balance   string `json:"balance"`
-	Amount    string `json:"amount"`
-	Comment   string `json:"comment"`
-	BlockId   int64  `json:"blockId"`
-	TxHash    string `json:"txHash"`
-	Time      int64  `json:"time"`
-	Type      int64  `json:"type"`
-}
-
 type WalletMonthHistory struct {
 	Month     string          `json:"month"`
 	Time      int64           `json:"time"`
@@ -227,4 +213,37 @@ type JoinEcosystemResponse struct {
 type keyEcosystem struct {
 	Key
 	Ecosystem
+}
+
+type AccountTxHistory struct {
+	Id          int    `json:"id"`
+	Address     string `json:"address"`
+	BlockId     int64  `json:"block_id"`
+	Contract    string `json:"contract"`
+	CreatedAt   int64  `json:"created_at"`
+	TokenSymbol string `json:"token_symbol"`
+	Type        int    `json:"type"`
+	Recipient   string `json:"recipient"`
+	Sender      string `json:"sender"`
+	Amount      string `json:"amount"`
+}
+
+type MonthHistoryResponse struct {
+	ID      int64  `json:"id"`
+	Balance string `json:"balance"`
+	Amount  string `json:"amount"`
+	Time    int64  `json:"time"`
+}
+
+type historyMonthRet struct {
+	Block            int64
+	Hash             []byte
+	SenderId         int64
+	RecipientId      int64
+	Type             int64
+	CreatedAt        int64
+	Isutxo           bool
+	SenderBalance    string
+	RecipientBalance string
+	Amount           string
 }

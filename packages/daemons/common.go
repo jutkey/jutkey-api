@@ -27,9 +27,13 @@ func StartDaemons(ctx context.Context) {
 	var node sql.HonorNodeInfo
 	err = node.CreateTable()
 	if err != nil {
-		ExitCh <- fmt.Errorf("Create honer node table err err:%s\n", err.Error())
+		ExitCh <- fmt.Errorf("Create honer node table err:%s\n", err.Error())
 	}
-	go sql.StatisticsSignalReceive()
+	err = sql.InitSpentInfoHistory()
+	if err != nil {
+		ExitCh <- fmt.Errorf("Init Spent Info History err:%s\n", err.Error())
+	}
+	sql.InitEcosystemInfo()
 
-	crontab.CreateCrontab()
+	go crontab.CreateCrontab()
 }

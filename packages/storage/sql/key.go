@@ -244,7 +244,7 @@ func GetKeyAmountByEcosystem(ecosystem int64, wallet string) (*WalletAmount, err
 	rets.UtxoAmount = utxoAmount.String()
 	rets.AccountAmount = key.Amount.String()
 	rets.Amount = utxoAmount.Add(key.Amount).String()
-	rets.TokenSymbol, _ = GetEcosystemTokenSymbol(ecosystem)
+	rets.TokenSymbol = Tokens.Get(ecosystem)
 
 	return &rets, nil
 }

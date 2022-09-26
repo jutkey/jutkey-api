@@ -9,6 +9,12 @@ import (
 	log "github.com/sirupsen/logrus"
 	"reflect"
 	"strconv"
+	"sync"
+)
+
+var (
+	Tokens   *EcosystemInfoMap
+	EcoNames *EcosystemInfoMap
 )
 
 type Ecosystem struct {
@@ -66,6 +72,11 @@ type feeModeInfo struct {
 	FeeModeDetail map[string]sqldb.FeeModeFlag `json:"fee_mode_detail"`
 	Combustion    combustion                   `json:"combustion"`
 	FollowFuel    float64                      `json:"follow_fuel"`
+}
+
+type EcosystemInfoMap struct {
+	sync.RWMutex
+	Map map[int64]string
 }
 
 func (e *Ecosystem) TableName() string {
@@ -188,16 +199,6 @@ id = ?) and (name like ? or token_symbol like ?)`, kid, keyword, keyword)
 	return &rets, nil
 }
 
-func GetEcosystemTokenSymbol(ecosystem int64) (tokenSymbol, name string) {
-	var es Ecosystem
-	f, err := es.GetTokenSymbol(ecosystem)
-	if f && err == nil {
-		name = es.Name
-		tokenSymbol = es.TokenSymbol
-	}
-	return
-}
-
 func GetFuelRate() (rlt map[int64]decimal.Decimal) {
 	var pla sqldb.PlatformParameter
 	f, err := pla.Get(nil, "fuel_rate")
@@ -218,4 +219,68 @@ func GetFuelRate() (rlt map[int64]decimal.Decimal) {
 		}
 	}
 	return
+}
+
+func GetAllTokenSymbol() ([]Ecosystem, error) {
+	var (
+		list []Ecosystem
+	)
+	err := GetDB(nil).Select("token_symbol,id").Find(&list).Error
+	if err != nil {
+		log.WithFields(log.Fields{"INFO": err}).Info("get all token symbol failed")
+		return nil, err
+	}
+	return list, nil
+}
+
+func GetAllEcosystemName() ([]Ecosystem, error) {
+	var (
+		list []Ecosystem
+	)
+	err := GetDB(nil).Select("name,id").Find(&list).Error
+	if err != nil {
+		log.WithFields(log.Fields{"INFO": err}).Info("get all ecosystem name failed")
+		return nil, err
+	}
+	return list, nil
+}
+
+func (p *EcosystemInfoMap) Get(ecosystem int64) string {
+	p.RLock()
+	defer p.RUnlock()
+	value, ok := p.Map[ecosystem]
+	if ok {
+		return value
+	}
+	return ""
+}
+
+func (p *EcosystemInfoMap) Set(ecosystem int64, value string) {
+	p.Lock()
+	defer p.Unlock()
+	p.Map[ecosystem] = value
+}
+
+func InitEcosystemInfo() {
+	Tokens = &EcosystemInfoMap{
+		Map: make(map[int64]string),
+	}
+	EcoNames = &EcosystemInfoMap{
+		Map: make(map[int64]string),
+	}
+}
+
+func SyncEcosystemInfo() {
+	list, err := GetAllTokenSymbol()
+	if err == nil {
+		for _, val := range list {
+			Tokens.Set(val.ID, val.TokenSymbol)
+		}
+	}
+	list, err = GetAllEcosystemName()
+	if err == nil {
+		for _, val := range list {
+			EcoNames.Set(val.ID, val.Name)
+		}
+	}
 }

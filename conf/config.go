@@ -3,10 +3,6 @@ package conf
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path"
-	"time"
-
 	"github.com/IBAX-io/go-ibax/packages/common/crypto"
 	"github.com/IBAX-io/go-ibax/packages/conf/syspar"
 	"github.com/IBAX-io/go-ibax/packages/smart"
@@ -14,6 +10,9 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"os"
+	"path"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"

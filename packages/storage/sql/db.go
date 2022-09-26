@@ -33,7 +33,7 @@ func isFound(db *gorm.DB) (bool, error) {
 	return true, db.Error
 }
 
-func HasTableOrView(tr *DbTransaction, names string) bool {
+func HasTableOrView(names string) bool {
 	var name string
 	conf.GetDbConn().Conn().Table("information_schema.tables").
 		Where("table_type IN ('BASE TABLE', 'VIEW') AND table_schema NOT IN ('pg_catalog', 'information_schema') AND table_name=?", names).

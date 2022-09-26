@@ -85,3 +85,7 @@ func PointValid(latitude, longitude float64) bool {
 
 	return true
 }
+
+func replaceSpaces(continent string) string {
+	return strings.Replace(continent, " ", "", -1)
+}

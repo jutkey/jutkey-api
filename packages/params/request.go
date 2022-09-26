@@ -106,9 +106,9 @@ func (p *MineHistoryRequest) Validate() error {
 		return err
 	}
 	if p.Order == "" {
-		p.Order = "id DESC"
+		p.Order = "block DESC"
 	} else {
-		p.Order += ", id DESC"
+		p.Order += ", block DESC"
 	}
 
 	return nil

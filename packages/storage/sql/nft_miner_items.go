@@ -66,7 +66,7 @@ func (p *NftMinerItems) GetByTokenHash(tokenHash string) (bool, error) {
 func (p *NftMinerItems) GetUserNftMinerSummary(keyid string) (NftMinerSummaryResponse, error) {
 	var ret NftMinerSummaryResponse
 	var total int64
-	if !HasTableOrView(nil, p.TableName()) {
+	if !HasTableOrView(p.TableName()) {
 		return ret, nil
 	}
 	if err := GetDB(nil).Table(p.TableName()).Where("owner = ? AND merge_status = 1", keyid).Count(&total).Error; err != nil {
@@ -131,7 +131,7 @@ func (p *NftMinerItems) GetUserNftFifteenDayOverview(day int, wallet string) (*[
 
 		if amount, err := his.GetDBDayNftInComeinfo(kid, t.UnixMilli(), te.UnixMilli()); err == nil {
 			var dm NftMinerOverviewResponse
-			dm.Amount = converter.ChainMoney(amount)
+			dm.Amount = amount.String()
 			dm.Time = t.Unix()
 			ret = append(ret, dm)
 		} else {
@@ -249,7 +249,7 @@ ORDER BY created_at DESC
 
 func NftMinerTableIsExist() bool {
 	var p NftMinerItems
-	if !HasTableOrView(nil, p.TableName()) {
+	if !HasTableOrView(p.TableName()) {
 		return false
 	}
 	return true
