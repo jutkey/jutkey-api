@@ -75,14 +75,11 @@ func InitPledgeAmount() {
 	}
 }
 
-func NodeListSearch(page, limit int, order, wallet string) (*GeneralResponse, error) {
+func NodeListSearch(page, limit int, wallet string) (*GeneralResponse, error) {
 	var (
 		list []NodeListResponse
 		rets GeneralResponse
 	)
-	if order == "" {
-		order = "vote desc,date_updated_referendum asc"
-	}
 
 	var info []nodeDetailInfo
 
@@ -127,8 +124,8 @@ SELECT cs.node_name,cs.id,cs.website,cs.api_address,hr.address,cs.vote,RANK() OV
 LEFT JOIN(
 	SELECT value,address FROM honor_node_info AS he
 )AS hr ON (cs.id = CAST(hr.value->>'id' AS numeric) AND CAST(hr.value->>'consensus_mode' AS numeric) = 2)
-ORDER BY ? OFFSET ? LIMIT ?
-`, PledgeAmount, wallet, order, (page-1)*limit, limit).Find(&info).Error
+ORDER BY vote desc,date_updated_referendum asc OFFSET ? LIMIT ?
+`, PledgeAmount, wallet, (page-1)*limit, limit).Find(&info).Error
 	if err != nil {
 		log.WithFields(log.Fields{"err": err}).Error("Node List Search Failed")
 		return &rets, err

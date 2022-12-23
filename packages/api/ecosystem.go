@@ -16,6 +16,7 @@ import (
 type findEcosystem struct {
 	params.WalletTp
 	params.GeneralRequest
+	Ids []int64 `json:"ids"`
 }
 
 func (p *findEcosystem) Validate() (err error) {
@@ -118,7 +119,7 @@ func getEcosystemThroughKey(c *gin.Context) {
 		return
 	}
 	keyid := converter.StringToAddress(req.Wallet)
-	mines, err := data.GetEcosystemsKeyAmount(keyid, req.Page, req.Limit, req.Order, req.Search)
+	mines, err := data.GetEcosystemsKeyAmount(keyid, req.Page, req.Limit, req.Search, req.Ids)
 	if err != nil {
 		if err.Error() == "record not found" {
 			ret.Return(nil, CodeSuccess)

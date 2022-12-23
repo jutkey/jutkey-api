@@ -7,16 +7,17 @@ import (
 	"fmt"
 	"github.com/IBAX-io/go-ibax/packages/consts"
 	"github.com/IBAX-io/go-ibax/packages/transaction"
-	"github.com/IBAX-io/go-ibax/packages/types"
 	"github.com/shopspring/decimal"
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
+var initStart = true
+
 type UtxoHistory struct {
 	Id               int64  `gorm:"primary_key;not null"`
-	Block            int64  `gorm:"column:block;not null"`
+	Block            int64  `gorm:"column:block;not null;index"`
 	Hash             []byte `gorm:"column:hash;not null"`
 	SenderId         int64  `gorm:"column:sender_id;not null"`
 	RecipientId      int64  `gorm:"column:recipient_id;not null"`
@@ -30,15 +31,15 @@ type UtxoHistory struct {
 }
 
 type spentInfoTxData struct {
-	OutputTxHash []byte
-	BlockId      int64
-	Time         int64
-	Data         []byte
+	Hash    []byte
+	BlockId int64
+	Data    []byte
 }
 
 type utxoTxInfo struct {
 	UtxoType     string
 	TransferType string
+	TxTime       int64
 
 	SenderId    int64
 	RecipientId int64
@@ -47,9 +48,10 @@ type utxoTxInfo struct {
 }
 
 const (
-	FeesType    = "fees"
-	TaxesType   = "taxes"
-	StartUpType = "startUp"
+	FeesType       = "fees"
+	TaxesType      = "taxes"
+	StartUpType    = "startUp"
+	CombustionType = "combustion"
 
 	AccountUTXO = "Account-UTXO"
 	UTXOAccount = "UTXO-Account"
@@ -74,7 +76,7 @@ func (p *UtxoHistory) GetLast() (bool, error) {
 }
 
 func (p *UtxoHistory) RollbackTransaction() error {
-	return GetDB(nil).Where("block > ?", p.Block).Delete(&UtxoHistory{}).Error
+	return GetDB(nil).Where("block >= ?", p.Block).Delete(&UtxoHistory{}).Error
 }
 
 func InitSpentInfoHistory() error {
@@ -90,35 +92,42 @@ func InitSpentInfoHistory() error {
 func SpentInfoHistorySync() error {
 	var insertData []UtxoHistory
 	var (
-		si     SpentInfo
-		st     SpentInfo
+		si     TransactionData
+		st     TransactionData
 		bkDiff int64
 	)
-
 	tr := &UtxoHistory{}
 	_, err := tr.GetLast()
 	if err != nil {
 		return fmt.Errorf("[utxo sync]get spent info history last failed:%s", err.Error())
 	}
-	f, err := si.GetLast()
+	f, err := si.GetLastByType(formatTxDataType(true))
 	if err != nil {
 		return fmt.Errorf("[utxo sync]get spent info last failed:%s", err.Error())
 	}
 	if f {
-		if tr.Block >= si.BlockId {
-			utxoTxCheck(si.BlockId)
+		if initStart {
+			err = tr.RollbackOne()
+			if err != nil {
+				return err
+			} else {
+				initStart = false
+			}
+		}
+		if tr.Block >= si.Block {
+			utxoTxCheck(si.Block)
 			return nil
 		}
 	}
 
-	f, err = st.GetFirst(tr.Block)
+	f, err = st.GetFirstByType(tr.Block, formatTxDataType(true))
 	if err != nil {
 		return fmt.Errorf("[utxo sync]get spent info block:%d first failed:%s", tr.Block, err.Error())
 	}
 	if !f {
 		return nil
 	}
-	txList, err := getSpentInfoHashList(st.BlockId, st.BlockId+100)
+	txList, err := getSpentInfoHashList(st.Block, st.Block+100)
 	if err != nil {
 		return fmt.Errorf("[utxo sync]get spent info hash list failed:%s", err.Error())
 	}
@@ -151,6 +160,13 @@ func SpentInfoHistorySync() error {
 			} else {
 				keysBalance[data.Ecosystem][data.SenderId] = keysBalance[data.Ecosystem][data.SenderId].Sub(amount)
 			}
+		} else {
+			ba := make(map[int64]decimal.Decimal)
+
+			ba[data.Ecosystem] = decimal.Zero
+			if _, ok := keysBalance[data.Ecosystem]; !ok {
+				keysBalance[data.Ecosystem] = ba
+			}
 		}
 
 		keysBalance[data.Ecosystem][data.RecipientId] = keysBalance[data.Ecosystem][data.RecipientId].Add(amount)
@@ -163,31 +179,34 @@ func SpentInfoHistorySync() error {
 
 	for _, val := range *txList {
 		var (
-			data       UtxoHistory
-			outputList []SpentInfo
-			si         SpentInfo
+			data UtxoHistory
+			s1   SpentInfo
 		)
-		info, err := val.UnmarshalBlockTransaction()
-		if err != nil {
-			return fmt.Errorf("[utxo sync]unmarshal utxo transaction failed:%s", err.Error())
-		}
-		data.CreatedAt = val.Time
-		data.Hash = val.OutputTxHash
+		data.Hash = val.Hash
 		data.Block = val.BlockId
 
 		if bkDiff != val.BlockId { //block diff update keys balance
 			bkDiff = val.BlockId
-			keys, err := si.GetOutputKeysByBlockId(val.BlockId)
+
+			if insertData != nil {
+				err = createUtxoTxBatches(GetDB(nil), &insertData)
+				if err != nil {
+					return err
+				}
+				insertData = nil
+			}
+
+			keys, err := s1.GetOutputKeysByBlockId(val.BlockId)
 			if err != nil {
 				return fmt.Errorf("[utxo sync]get block:%d output keys failed:%s", val.BlockId, err.Error())
 			}
 			for _, k := range keys {
 				var (
-					s1 UtxoHistory
+					his UtxoHistory
 				)
 				ba := make(map[int64]decimal.Decimal)
 
-				balance, err := s1.GetKeyBalance(k.OutputKeyId, k.Ecosystem)
+				balance, err := his.GetKeyBalance(k.OutputKeyId, k.Ecosystem)
 				if err != nil {
 					return fmt.Errorf("[utxo sync]get ecosystem:%d output keys:%d balance failed:%s", k.Ecosystem, k.OutputKeyId, err.Error())
 				}
@@ -200,37 +219,31 @@ func SpentInfoHistorySync() error {
 					keysBalance[k.Ecosystem][k.OutputKeyId] = balance
 				}
 			}
+
 		}
 
-		outputList, err = si.GetOutputs(val.OutputTxHash)
+		info, err := val.UnmarshalBlockTransaction()
 		if err != nil {
-			return fmt.Errorf("[utxo sync]get out puts failed:%s", err.Error())
+			return fmt.Errorf("[utxo sync]unmarshal utxo transaction failed:%s", err.Error())
 		}
+		data.CreatedAt = info.TxTime
 
 		if info.UtxoType == UtxoTx {
 			var (
-				index       int
-				indexSet    bool
-				ecoCount    int
-				ecoGasExist bool
+				outputList []SpentInfo
+				si         SpentInfo
 			)
-
-			for _, v := range outputList {
-				if v.Ecosystem != 1 {
-					ecoCount += 1
-				}
+			outputList, err = si.GetOutputs(val.Hash)
+			if err != nil {
+				return fmt.Errorf("[utxo sync]get out puts failed:%s", err.Error())
 			}
-			if ecoCount >= 3 {
-				ecoGasExist = true
-			}
-
 			for _, v := range outputList {
 				amount, _ := decimal.NewFromString(v.OutputValue)
 				recipientId := v.OutputKeyId
 				if info.Ecosystem == 1 {
 					if v.Ecosystem == 1 {
-						switch index {
-						case 0:
+						switch v.Type {
+						case 20: //fees type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -242,8 +255,7 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 1:
+						case 21: //taxes type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -255,8 +267,7 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 2:
+						case 26: //utxo tx
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -267,15 +278,12 @@ func SpentInfoHistorySync() error {
 							if err != nil {
 								return err
 							}
-
-							index += 1
-						case 3:
 						}
 					}
 				} else {
 					if v.Ecosystem == 1 {
-						switch index {
-						case 0:
+						switch v.Type {
+						case 20: //fees type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -287,8 +295,7 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 1:
+						case 21: //taxes type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -300,20 +307,21 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 2:
 						}
 					} else {
-						if !indexSet {
-							if ecoGasExist {
-								index = 0
-							} else {
-								index = 2
+						switch v.Type {
+						case 23: //combustion type
+							data.Amount = amount.String()
+							data.SenderId = info.SenderId
+							data.RecipientId = recipientId
+							data.Ecosystem = v.Ecosystem
+							data.Type = formatSpentInfoHistoryType(CombustionType)
+
+							err = addInsertData(data, amount)
+							if err != nil {
+								return err
 							}
-							indexSet = true
-						}
-						switch index {
-						case 0:
+						case 20: //fees type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -325,8 +333,7 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 1:
+						case 21: //taxes type
 
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
@@ -339,8 +346,7 @@ func SpentInfoHistorySync() error {
 								return err
 							}
 
-							index += 1
-						case 2:
+						case 26: //utxo tx type
 							data.Amount = amount.String()
 							data.SenderId = info.SenderId
 							data.RecipientId = recipientId
@@ -351,21 +357,18 @@ func SpentInfoHistorySync() error {
 							if err != nil {
 								return err
 							}
-
-							index += 1
-						case 3:
 						}
 					}
 				}
 			}
 		} else if info.UtxoType == StartUpType {
 			var lt LogTransaction
-			f, err := lt.GetByHash(val.OutputTxHash)
+			f, err := lt.GetByHash(val.Hash)
 			if err != nil {
 				return err
 			}
 			if !f {
-				return fmt.Errorf("[utxo sync]get log hash doesn't exist hash:%s", hex.EncodeToString(val.OutputTxHash))
+				return fmt.Errorf("[utxo sync]get log hash doesn't exist hash:%s", hex.EncodeToString(val.Hash))
 			}
 
 			amount := decimal.New(consts.FounderAmount, int32(consts.MoneyDigits))
@@ -392,7 +395,8 @@ func SpentInfoHistorySync() error {
 				return err
 			}
 		}
-
+	}
+	if insertData != nil {
 		err = createUtxoTxBatches(GetDB(nil), &insertData)
 		if err != nil {
 			return err
@@ -407,59 +411,68 @@ func createUtxoTxBatches(dbTx *gorm.DB, data *[]UtxoHistory) error {
 	if data == nil {
 		return nil
 	}
-	return dbTx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(data, 1000).Error
+	return dbTx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(data, 5000).Error
 }
 
 func (si *spentInfoTxData) UnmarshalBlockTransaction() (*utxoTxInfo, error) {
+	if si.Data == nil {
+		return nil, errors.New("transaction Data is null")
+	}
+
 	var (
-		block = &types.BlockData{}
+		result utxoTxInfo
 	)
-	blockBuffer := bytes.NewBuffer(si.Data)
-	if err := block.UnmarshallBlock(blockBuffer.Bytes()); err != nil {
+	lt := &LogTransaction{}
+
+	tx, err := transaction.UnmarshallTransaction(bytes.NewBuffer(si.Data), false)
+	if err != nil {
 		return nil, err
 	}
-	for i := 0; i < len(block.TxFullData); i++ {
-		tx, err := transaction.UnmarshallTransaction(bytes.NewBuffer(block.TxFullData[i]))
-		if err != nil {
-			return nil, err
-		}
-		if hex.EncodeToString(tx.Hash()) == hex.EncodeToString(si.OutputTxHash) {
 
-			var result utxoTxInfo
-			if tx.IsSmartContract() {
-				result.Ecosystem = tx.SmartContract().TxSmart.Header.EcosystemID
-				if tx.SmartContract().TxSmart.UTXO != nil {
-					result.SenderId = tx.KeyID()
-					result.UtxoType = UtxoTx
-				} else if tx.SmartContract().TxSmart.TransferSelf != nil {
-					result.UtxoType = UtxoTransfer
-					result.SenderId = tx.KeyID()
-					result.RecipientId = tx.KeyID()
-					result.Amount, _ = decimal.NewFromString(tx.SmartContract().TxSmart.TransferSelf.Value)
-					if tx.SmartContract().TxSmart.TransferSelf.Source == "Account" && tx.SmartContract().TxSmart.TransferSelf.Target == "UTXO" {
-						result.TransferType = AccountUTXO
-					} else {
-						result.TransferType = UTXOAccount
-					}
-				} else {
-					return &result, errors.New("doesn't not UTXO transaction")
-				}
+	if tx.IsSmartContract() {
+		result.Ecosystem = tx.SmartContract().TxSmart.Header.EcosystemID
+		if tx.SmartContract().TxSmart.UTXO != nil {
+			result.SenderId = tx.KeyID()
+			result.UtxoType = UtxoTx
+		} else if tx.SmartContract().TxSmart.TransferSelf != nil {
+			result.UtxoType = UtxoTransferSelf
+			result.SenderId = tx.KeyID()
+			result.RecipientId = tx.KeyID()
+			result.Amount, _ = decimal.NewFromString(tx.SmartContract().TxSmart.TransferSelf.Value)
+			if tx.SmartContract().TxSmart.TransferSelf.Source == "Account" && tx.SmartContract().TxSmart.TransferSelf.Target == "UTXO" {
+				result.TransferType = AccountUTXO
 			} else {
-				if si.BlockId == 1 {
-					result.UtxoType = StartUpType
-					return &result, nil
-				}
-				return nil, errors.New("doesn't not Smart Contract")
+				result.TransferType = UTXOAccount
+			}
+		} else {
+			return &result, errors.New("doesn't not UTXO transaction")
+		}
+		result.TxTime = tx.Timestamp()
+
+		if result.TxTime == 0 {
+			f, err := lt.GetTxTime(si.Hash)
+			if err == nil && f {
+				result.TxTime = lt.Timestamp
+			}
+			result.TxTime = lt.Timestamp
+		}
+	} else {
+		if si.BlockId == 1 {
+			result.UtxoType = StartUpType
+			f, err := lt.GetTxTime(si.Hash)
+			if err == nil && f {
+				result.TxTime = lt.Timestamp
 			}
 			return &result, nil
 		}
+		return nil, errors.New("doesn't not Smart Contract")
 	}
-	return nil, fmt.Errorf("doesn't not UTXO transaction from block id:%d,hash:%s\n", si.BlockId, hex.EncodeToString(si.OutputTxHash))
+	return &result, nil
 }
 
 func formatSpentInfoHistoryType(utxoType string) int {
 	switch utxoType {
-	case UtxoTransfer:
+	case UtxoTransferSelf:
 		return 1
 	case UtxoTx:
 		return 2
@@ -469,6 +482,8 @@ func formatSpentInfoHistoryType(utxoType string) int {
 		return 4
 	case StartUpType:
 		return 5
+	case CombustionType:
+		return 6
 	}
 	return 0
 }
@@ -476,7 +491,7 @@ func formatSpentInfoHistoryType(utxoType string) int {
 func parseSpentInfoHistoryType(utxoType int) string {
 	switch utxoType {
 	case 1:
-		return UtxoTransfer
+		return UtxoTransferSelf
 	case 2:
 		return UtxoTx
 	case 3:
@@ -485,6 +500,8 @@ func parseSpentInfoHistoryType(utxoType int) string {
 		return TaxesType
 	case 5:
 		return StartUpType
+	case 6:
+		return CombustionType
 	}
 	return ""
 }
@@ -519,6 +536,8 @@ func compatibleContractAccountType(utxoType int) (contractType int) {
 	case 4:
 		contractType = 2
 	case 5:
+	case 6:
+		contractType = 16
 	}
 	return
 }
@@ -536,7 +555,6 @@ func utxoTxCheck(lastBlockId int64) {
 				}
 				if tx.Block > 0 {
 					log.WithFields(log.Fields{"log hash doesn't exist": hex.EncodeToString(tx.Hash), "block": tx.Block}).Info("[utxo tx check] rollback data")
-					tx.Block -= 1
 					err = tx.RollbackTransaction()
 					if err == nil {
 						utxoTxCheck(tx.Block)
@@ -569,4 +587,15 @@ WHERE(recipient_id = ? OR sender_id = ?) AND ecosystem = ? ORDER BY id DESC LIMI
 	}
 
 	return
+}
+
+func (p *UtxoHistory) RollbackOne() error {
+	if p.Block > 0 {
+		err := p.RollbackTransaction()
+		if err != nil {
+			log.WithFields(log.Fields{"error": err, "block": p.Block}).Error("[rollback one] rollback Failed")
+			return err
+		}
+	}
+	return nil
 }

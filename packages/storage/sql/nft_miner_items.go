@@ -54,13 +54,22 @@ func (p *NftMinerItems) TableName() string {
 	return "1_nft_miner_items"
 }
 
-func (p *NftMinerItems) GetById(id int64) (bool, error) {
-	return isFound(GetDB(nil).Where("id = ? ", id).First(p))
+func (p *NftMinerItems) GetId(id int64) (bool, error) {
+	return isFound(GetDB(nil).Where("id = ? AND merge_status = 1", id).First(p))
 }
 
-func (p *NftMinerItems) GetByTokenHash(tokenHash string) (bool, error) {
+func (p *NftMinerItems) GetById(id int64, account string) (bool, error) {
+	return isFound(GetDB(nil).Where("id = ? AND merge_status = 1 AND owner = ?", id, account).First(p))
+}
+
+func (p *NftMinerItems) GetByTokenHash(tokenHash, account string) (bool, error) {
 	hash, _ := hex.DecodeString(tokenHash)
-	return isFound(GetDB(nil).Where("token_hash = ? ", hash).First(p))
+	return isFound(GetDB(nil).Where("token_hash = ? AND merge_status = 1 AND owner = ?", hash, account).First(p))
+}
+
+func (p *NftMinerItems) GetByTxHash(txHash string, account string) (bool, error) {
+	hash, _ := hex.DecodeString(txHash)
+	return isFound(GetDB(nil).Where("tx_hash = ? AND merge_status = 1 AND owner = ?", hash, account).First(p))
 }
 
 func (p *NftMinerItems) GetUserNftMinerSummary(keyid string) (NftMinerSummaryResponse, error) {
@@ -157,18 +166,20 @@ func (p *NftMinerItems) GetNftMinerKeyInfo(account string) (*CommonResult, error
 
 	q := GetDB(nil).Raw(`
 SELECT v1.id,encode(v1.token_hash,'hex')token_hash,v1.energy_point,COALESCE(v2.stake_amount,'0') stake_amount,
-	COALESCE(v2.energy_power,0)energy_power,(SELECT COALESCE(count(1),0)burst
-FROM "1_history" WHERE type = 12 AND comment = 'NFT Miner #'||v1.id AND recipient_id = ?),v2.start_dated,v2.end_dated FROM(
+	COALESCE(v2.energy_power,0)energy_power,
+v2.start_dated,v2.end_dated
+FROM(
 	SELECT id,token_hash,owner,energy_point FROM "1_nft_miner_items" WHERE owner = ? AND merge_status = 1
 )AS v1
 LEFT JOIN(
 	SELECT stake_amount,energy_power,token_id,start_dated,end_dated FROM "1_nft_miner_staking" WHERE staker = ? AND staking_status = 1
 )AS v2 ON (v2.token_id = v1.id)
-`, kid, account, account)
+ORDER BY id asc
+`, account, account)
 
 	var res CommonResult
 
-	if err := GetDB(nil).Table(p.TableName()).Where("owner = ?", account).Count(&res.Total).Error; err != nil {
+	if err := GetDB(nil).Table(p.TableName()).Where("owner = ? AND merge_status = 1", account).Count(&res.Total).Error; err != nil {
 		return nil, err
 	}
 	f, err := isFound(GetDB(nil).Table(p.TableName()).Where("creator = ?", account).Take(p))
@@ -189,6 +200,7 @@ LEFT JOIN(
 		if !(v.StartDated <= nowTime && v.EndDated >= nowTime) {
 			v.EnergyPower = 0
 		}
+		v.Burst = getNftMinerBurstCount(kid, v.Id)
 		list[k] = v
 	}
 
@@ -214,8 +226,8 @@ func (p *NftMinerItems) GetNftMinerRewardHistory(search any, page, limit int) (*
 		return nil, fmt.Errorf("account invalid:%s", account)
 	}
 	q := GetDB(nil).Raw(`
-SELECT v2.token_hash,v1.amount,v1.created_at FROM (
-	SELECT CAST(substr(comment,12,length(comment)-length('NFT Miner #')) AS numeric) nft_id,amount,created_at/1000 as created_at FROM "1_history" 
+SELECT v2.token_hash,v1.txhash,v1.amount,v1.created_at FROM (
+	SELECT CAST(substr(comment,12,length(comment)-length('NFT Miner #')) AS numeric) nft_id,txhash,amount,created_at/1000 as created_at FROM "1_history" 
 	WHERE type = 12 AND recipient_id = ? ORDER BY id DESC OFFSET ? LIMIT ?
 )AS v1
 LEFT JOIN(
@@ -263,11 +275,11 @@ func (p *NftMinerItems) GetNftMinerDetailBySearch(search any, wallet string) (*N
 	)
 	switch reflect.TypeOf(search).String() {
 	case "string":
-		minerHash := search.(string)
-		if minerHash == "" {
+		hash := search.(string)
+		if hash == "" {
 			return nil, errors.New("request params invalid")
 		}
-		f, err = p.GetByTokenHash(minerHash)
+		f, err = p.GetByTokenHash(hash, wallet)
 	case "json.Number":
 		minerId, err := search.(json.Number).Int64()
 		if err != nil {
@@ -276,7 +288,7 @@ func (p *NftMinerItems) GetNftMinerDetailBySearch(search any, wallet string) (*N
 		if minerId <= 0 {
 			return nil, errors.New("request params invalid")
 		}
-		f, err = p.GetById(minerId)
+		f, err = p.GetById(minerId, wallet)
 	default:
 		log.WithFields(log.Fields{"search type": reflect.TypeOf(search).String()}).Info("Get Nft Miner Detail By Search Failed")
 		return nil, errors.New("request params invalid")
@@ -297,6 +309,7 @@ func (p *NftMinerItems) GetNftMinerDetailBySearch(search any, wallet string) (*N
 	rets.EnergyPoint = p.EnergyPoint
 	rets.DateCreated = p.DateCreated
 	rets.Owner = p.Owner
+	rets.Creator = p.Creator
 
 	var stak NftMinerStaking
 	err = GetDB(nil).Table(stak.TableName()).Where("token_id = ? and staker = ?", p.ID, wallet).Count(&rets.StakeCount).Error
@@ -325,6 +338,17 @@ func (p *NftMinerItems) GetNftMinerDetailBySearch(search any, wallet string) (*N
 			}
 		}
 
+	} else {
+		var events NftMinerEvents
+		f, err = isFound(GetDB(nil).Select("id").
+			Where("token_id = ? AND (event = 'Transfer' OR event = 'Synthesis')", p.ID).Last(&events))
+		if err != nil {
+			log.Info("Get Nft Miner Detail By Search events failed:", err.Error(), " nftId:", p.ID, " account:", wallet)
+			return nil, err
+		}
+		if f {
+			rets.StakeStatus = 2
+		}
 	}
 
 	var reward SumAmount
@@ -367,13 +391,13 @@ func (p *NftMinerItems) GetNftMinerTxInfo(search any, page, limit int, order, wa
 	}
 	switch reflect.TypeOf(search).String() {
 	case "string":
-		f, err = p.GetByTokenHash(search.(string))
+		f, err = p.GetByTokenHash(search.(string), wallet)
 	case "json.Number":
 		tokenId, err := search.(json.Number).Int64()
 		if err != nil {
 			return nil, err
 		}
-		f, err = p.GetById(tokenId)
+		f, err = p.GetById(tokenId, wallet)
 	default:
 		log.WithFields(log.Fields{"search type": reflect.TypeOf(search).String()}).Warn("Get Nft Miner Tx Info Search Failed")
 		return nil, errors.New("request params invalid")
@@ -395,7 +419,7 @@ func (p *NftMinerItems) GetNftMinerTxInfo(search any, page, limit int, order, wa
 		}
 	}
 
-	err = GetDB(nil).Select("id,created_at,amount").
+	err = GetDB(nil).Select("id,created_at,amount,txhash").
 		Where("type = 12 AND comment = ? AND recipient_id = ?", fmt.Sprintf("NFT Miner #%d", p.ID), keyId).
 		Limit(limit).Offset((page - 1) * limit).Order(order).Find(&his).Error
 	if err != nil {
@@ -410,6 +434,7 @@ func (p *NftMinerItems) GetNftMinerTxInfo(search any, page, limit int, order, wa
 		rets[i].NftMinerId = p.ID
 		rets[i].Time = MsToSeconds(his[i].CreatedAt)
 		rets[i].Ins = his[i].Amount.String()
+		rets[i].Txhash = hex.EncodeToString(his[i].Txhash)
 	}
 	ret.Page = page
 	ret.Limit = limit
@@ -482,4 +507,90 @@ func StrReplaceAllString(s2 string) (strReplace StrReplaceStruct, indexList []St
 		}
 	}
 	return strReplace, indexList
+}
+
+func (p *NftMinerItems) NftMinerSynthesizable(account string, search any) (*[]SynthesizableResponse, error) {
+	kid := converter.StringToAddress(account)
+	if kid == 0 {
+		return nil, fmt.Errorf("account invalid:%s", account)
+	}
+	var nowNftId int64
+
+	switch reflect.TypeOf(search).String() {
+	case "json.Number":
+		tokenId, err := search.(json.Number).Int64()
+		if err != nil {
+			return nil, err
+		}
+		nowNftId = tokenId
+		f, err := p.GetById(nowNftId, account)
+		if err != nil {
+			return nil, err
+		}
+		if !f {
+			return nil, errors.New("NFT doesn't not exist")
+		}
+	default:
+		log.WithFields(log.Fields{"search type": reflect.TypeOf(search).String()}).Warn("Get Nft Miner Synthesizable Search Failed")
+		return nil, errors.New("request params invalid")
+	}
+
+	var list []struct {
+		Id          int64  `json:"id"`
+		TokenHash   []byte `json:"token_hash"`
+		EnergyPoint int    `json:"energy_point"`
+	}
+	var rets []SynthesizableResponse
+
+	err := GetDB(nil).Table(p.TableName()).Select("id,token_hash,energy_point").
+		Where("owner = ? AND merge_status = 1 AND id <> ?", account, nowNftId).Find(&list).Error
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := getSynthesizableNftMiner(nowNftId, account)
+	if err != nil {
+		return nil, err
+	}
+	if !f {
+		return nil, fmt.Errorf("current NFT:%d cannot be merged", nowNftId)
+	}
+
+	for _, v := range list {
+		f, err := getSynthesizableNftMiner(v.Id, account)
+		if err != nil {
+			return nil, err
+		}
+		if f {
+			rets = append(rets, SynthesizableResponse{v.Id, hex.EncodeToString(v.TokenHash), v.EnergyPoint})
+		}
+	}
+
+	return &rets, nil
+}
+
+func getSynthesizableNftMiner(id int64, account string) (bool, error) {
+	var stak NftMinerStaking
+	f, err := isFound(GetDB(nil).Select("staking_status").Where("token_id = ? AND staker = ?", id, account).Last(&stak))
+	if err != nil {
+		log.Info("Get Nft Miner Synthesizable staking status failed:", err.Error(), " nftId:", id, " account:", account)
+		return false, err
+	}
+	if f {
+		if stak.StakingStatus == 2 {
+			return true, nil
+		}
+	} else {
+		var events NftMinerEvents
+		f, err = isFound(GetDB(nil).Select("id").
+			Where("token_id = ? AND (event = 'Transfer' OR event = 'Synthesis')", id).Last(&events))
+		if err != nil {
+			log.Info("Get Nft Miner Synthesizable events failed:", err.Error(), " nftId:", id, " account:", account)
+			return false, err
+		}
+		if f {
+			return true, nil
+		}
+	}
+	return false, nil
 }

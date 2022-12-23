@@ -153,7 +153,14 @@ func EcosystemSearch(search any, order, account string) (*[]EcosystemSearchRespo
 	} else {
 		keyword = "%%"
 	}
-	var rets []EcosystemSearchResponse
+	var list []struct {
+		Name        string
+		Id          int64
+		TokenSymbol string
+		IsJoin      bool
+		Info        string
+		Amount      decimal.Decimal
+	}
 
 	kid := converter.StringToAddress(account)
 	if kid == 0 {
@@ -161,7 +168,7 @@ func EcosystemSearch(search any, order, account string) (*[]EcosystemSearchRespo
 	}
 	if order == "all" {
 		query := GetDB(nil).Raw(`
-SELECT name,id,COALESCE(token_symbol,'')token_symbol,true AS is_join FROM "1_ecosystems" WHERE id in(SELECT ecosystem FROM "1_keys" WHERE 
+SELECT name,id,COALESCE(token_symbol,'')token_symbol,true AS is_join,info FROM "1_ecosystems" WHERE id in(SELECT ecosystem FROM "1_keys" WHERE 
 id = ?) and (name like ? or token_symbol like ?) AND token_symbol <> '' AND id <> 1
 
 UNION
@@ -172,34 +179,81 @@ SELECT v2.name,v2.id,v2.token_symbol,
 		TRUE
 	ELSE
 		FALSE
-	END AS is_join FROM(
+	END AS is_join,v2.info FROM(
 	SELECT ecosystem FROM "1_parameters" WHERE name = 'free_membership' AND value = '1'
 )AS v1
 LEFT JOIN
 (
-	SELECT id,name,COALESCE(token_symbol,'')AS token_symbol FROM "1_ecosystems" 
+	SELECT id,name,COALESCE(token_symbol,'')AS token_symbol,info FROM "1_ecosystems" 
 )AS v2 ON(v1.ecosystem = v2.id)
 WHERE (v2.name like ? or v2.token_symbol like ?) AND token_symbol <> '' AND id <> 1
+ORDER BY id asc
 `, kid, keyword, keyword, kid, keyword, keyword)
-		if err := query.Where("token_symbol <> ''").Find(&rets).Error; err != nil {
+		if err := query.Find(&list).Error; err != nil {
 			log.Info("Ecosystem Search failed:", err, " keyword:", keyword, " account:", account)
 			return nil, errors.New("search account ecosystem failed")
 		}
 	} else if order == "token_join" {
 		query := GetDB(nil).Table("1_ecosystems").Select("name,id,token_symbol,true as is_join").Where(`id in(SELECT ecosystem FROM "1_keys" WHERE 
 id = ?) and (name like ? or token_symbol like ?)`, kid, keyword, keyword)
-		if err := query.Where("token_symbol <> ''").Find(&rets).Error; err != nil {
+		if err := query.Where("token_symbol <> ''").Order("id asc").Find(&list).Error; err != nil {
 			log.Info("Ecosystem Search failed:", err, " account:", account)
 			return nil, errors.New("search account ecosystem failed")
 		}
 	} else {
 		return nil, errors.New("request params invalid")
 	}
+	var rets []EcosystemSearchResponse
+	for _, v := range list {
+		var rt EcosystemSearchResponse
+		rt.Id = v.Id
+		rt.Name = v.Name
+		rt.IsJoin = v.IsJoin
+		rt.TokenSymbol = v.TokenSymbol
+		if order == "all" && v.Info != "" {
+			minfo := make(map[string]any)
+			err := json.Unmarshal([]byte(v.Info), &minfo)
+			if err != nil {
+				return nil, err
+			}
+			usid, ok := minfo["logo"]
+			if ok {
+				urid := escape(usid)
+				uid, err := strconv.ParseInt(urid, 10, 64)
+				if err != nil {
+					return nil, err
+				}
+
+				hash, err := GetFileHash(uid)
+				if err != nil {
+					return nil, err
+				}
+				rt.LogoHash = hash
+			}
+
+			ky := &Key{}
+			_, err = ky.GetEcosystemKeys(v.Id, kid)
+			if err != nil {
+				return nil, err
+			}
+
+			var spent SpentInfo
+			utxoAmount, err := spent.GetAmountByKeyId(kid, v.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			rt.Amount = ky.Amount.Add(utxoAmount).String()
+
+		}
+		rets = append(rets, rt)
+	}
 
 	return &rets, nil
 }
 
 func GetFuelRate() (rlt map[int64]decimal.Decimal) {
+
 	var pla sqldb.PlatformParameter
 	f, err := pla.Get(nil, "fuel_rate")
 	if err == nil && f {

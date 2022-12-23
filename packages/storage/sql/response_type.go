@@ -61,6 +61,8 @@ type EcosystemSearchResponse struct {
 	Id          int64  `json:"id"`
 	TokenSymbol string `json:"tokenSymbol"`
 	IsJoin      bool   `json:"isJoin"`
+	LogoHash    string `json:"logoHash"`
+	Amount      string `json:"amount"`
 }
 
 type AccountHistoryTotal struct {
@@ -151,6 +153,7 @@ type NftMinerInfoResponse struct {
 	EnergyPoint int    `json:"energyPoint"`
 	StakeAmount string `json:"stakeAmount"` //starking
 	StakeCount  int64  `json:"stakeCount"`
+	Creator     string `json:"creator"`
 	Owner       string `json:"owner"` //owner account
 	RewardCount int64  `json:"rewardCount"`
 	DateCreated int64  `json:"dateCreated"` //create time
@@ -181,6 +184,7 @@ type NftMinerTxInfoResponse struct {
 	NftMinerId int64  `json:"nftMinerId"`
 	Time       int64  `json:"time"`
 	Ins        string `json:"ins"`
+	Txhash     string `json:"txhash"`
 }
 
 type NodeStakingHistory struct {
@@ -219,6 +223,7 @@ type AccountTxHistory struct {
 	Id          int    `json:"id"`
 	Address     string `json:"address"`
 	BlockId     int64  `json:"block_id"`
+	Hash        string `json:"hash"`
 	Contract    string `json:"contract"`
 	CreatedAt   int64  `json:"created_at"`
 	TokenSymbol string `json:"token_symbol"`
@@ -242,8 +247,62 @@ type historyMonthRet struct {
 	RecipientId      int64
 	Type             int64
 	CreatedAt        int64
-	Isutxo           bool
 	SenderBalance    string
 	RecipientBalance string
 	Amount           string
+}
+
+type SynthesizableResponse struct {
+	Id          int64  `json:"id"`
+	TokenHash   string `json:"token_hash"`
+	EnergyPoint int    `json:"energy_point"`
+}
+
+type NFtMinerTransferInfoResponse struct {
+	Id          int64  `json:"id"`
+	TokenHash   string `json:"tokenHash"`
+	EnergyPoint int    `json:"energyPoint"`
+	Creator     string `json:"creator"`
+	Owner       string `json:"owner"`
+	MemberName  string `json:"memberName"`
+	DateCreated int64  `json:"dateCreated"`
+	TxHash      string `json:"txHash"`
+}
+
+type NftMinerSynthesisResponse struct {
+	Id          int64  `json:"id"`
+	TokenHash   string `json:"tokenHash"`
+	EnergyPoint int    `json:"energyPoint"`
+	Creator     string `json:"creator"`
+	Owner       string `json:"owner"`
+	DateCreated int64  `json:"dateCreated"`
+	TxHash      string `json:"txHash"`
+}
+
+type AirdropInfoResponse struct {
+	Total      string `json:"total"`
+	IsGet      string `json:"is_get"`
+	PerGet     string `json:"per_get"`
+	Lock       string `json:"lock"`
+	X5Lock     string `json:"x5_lock"`
+	X5Get      string `json:"x5_get"`
+	X5Period   int64  `json:"x5_period"`
+	X10Lock    string `json:"x10_lock"`
+	X10Get     string `json:"x10_get"`
+	X10Period  int64  `json:"x10_period"`
+	X20Lock    string `json:"x20_lock"`
+	X20Get     string `json:"x20_get"`
+	X20Period  int64  `json:"x20_period"`
+	CanSpeedUp bool   `json:"can_speed_up"`
+	UnLockAll  bool   `json:"un_lock_all"`
+	NowSpeedUp int64  `json:"now_speed_up"`
+
+	NextPeriod int64 `json:"next_period"`
+	Surplus    int64 `json:"surplus"`
+}
+
+type AirdropBalanceResponse struct {
+	Lock   decimal.Decimal `json:"lock"`
+	Amount decimal.Decimal `json:"amount"`
+	Show   bool            `json:"show"`
 }

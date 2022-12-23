@@ -2,8 +2,10 @@ package sql
 
 import (
 	"errors"
+	"github.com/IBAX-io/go-ibax/packages/storage/sqldb"
 	"github.com/shopspring/decimal"
 	log "github.com/sirupsen/logrus"
+	"strconv"
 )
 
 // SpentInfo is model
@@ -14,17 +16,14 @@ type SpentInfo struct {
 	OutputIndex  int32  `gorm:"not null"`
 	OutputKeyId  int64  `gorm:"not null"`
 	OutputValue  string `gorm:"not null"`
-	Scene        string
 	Ecosystem    int64
-	Contract     string
 	BlockId      int64
-	Asset        string
-	Action       string `gorm:"-"` // UTXO operation control : change
+	Type         int64
 }
 
 const (
-	UtxoTx       = "UTXO_Tx"
-	UtxoTransfer = "UTXO_Transfer"
+	UtxoTx           = "UTXO_Tx"
+	UtxoTransferSelf = "UTXO_Transfer_Self"
 )
 
 // TableName returns name of table
@@ -54,7 +53,7 @@ func GetUtxoInput(keyId int64, search []int64) (*[]UtxoInputResponse, error) {
 	)
 
 	if len(search) > 10 {
-		return nil, errors.New("search len must be less than 11")
+		return nil, errors.New("search max len 10")
 	}
 
 	err = GetDB(nil).Table(si.TableName()).Select("count(1) AS input,ecosystem").
@@ -74,8 +73,25 @@ func GetUtxoInput(keyId int64, search []int64) (*[]UtxoInputResponse, error) {
 			rets = append(rets, UtxoInputResponse{Ecosystem: v1, Input: 0})
 		}
 	}
+
 	fuels := GetFuelRate()
 	for k, val := range rets {
+		if val.Ecosystem != 1 {
+			state := &sqldb.StateParameter{}
+			state.SetTablePrefix(strconv.FormatInt(val.Ecosystem, 10))
+			f, _ := state.Get(nil, "utxo_fee")
+			if !f {
+				val.FuelRate = decimal.Zero.String()
+				rets[k] = val
+				continue
+			} else {
+				if state.Value != "1" {
+					val.FuelRate = decimal.Zero.String()
+					rets[k] = val
+					continue
+				}
+			}
+		}
 		if _, ok := fuels[val.Ecosystem]; ok {
 			val.FuelRate = fuels[val.Ecosystem].String()
 		} else {
@@ -89,7 +105,7 @@ func GetUtxoInput(keyId int64, search []int64) (*[]UtxoInputResponse, error) {
 
 func (si *SpentInfo) GetOutputs(txHash []byte) (list []SpentInfo, err error) {
 	err = GetDB(nil).Table(si.TableName()).
-		Where("output_tx_hash = ?", txHash).Order("output_index ASC").Find(&list).Error
+		Where("output_tx_hash = ?", txHash).Order("ecosystem ASC").Find(&list).Error
 	return
 }
 
@@ -108,13 +124,17 @@ func getSpentInfoHashList(stId, endId int64) (*[]spentInfoTxData, error) {
 	var rlt []spentInfoTxData
 
 	err = GetDB(nil).Raw(`
-SELECT v1.block_id,v1.output_tx_hash,v2.time,v2.data FROM(
-	SELECT output_tx_hash,block_id FROM spent_info WHERE block_id >= ? AND block_id < ? GROUP BY output_tx_hash,block_id ORDER BY block_id asc
+SELECT v1.block_id,v1.hash,v2.data FROM(
+	SELECT output_tx_hash AS hash,block_id FROM spent_info WHERE block_id >= ? AND block_id < ? GROUP BY output_tx_hash,block_id
+		UNION
+	SELECT input_tx_hash AS hash,lg.block AS block_id FROM spent_info AS s1 LEFT JOIN log_transactions AS lg ON(lg.hash = s1.input_tx_hash) 
+	WHERE block >= ? AND block < ? AND input_tx_hash IS NOT NULL GROUP BY input_tx_hash,block
 )AS v1
 LEFT JOIN(
-	SELECT id,time,data FROM block_chain
-)AS v2 ON(v2.id = v1.block_id)
- `, stId, endId).Find(&rlt).Error
+	SELECT hash,data FROM tx_data WHERE block >= ? AND block < ?
+)AS v2 ON(v2.hash = v1.hash)
+ORDER BY block_id asc
+`, stId, endId, stId, endId, stId, endId).Find(&rlt).Error
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +143,12 @@ LEFT JOIN(
 }
 
 func (p *SpentInfo) GetOutputKeysByBlockId(blockId int64) (outputKeys []SpentInfo, err error) {
-	err = GetDB(nil).Select("output_key_id,ecosystem").Table(p.TableName()).
-		Where("block_id = ?", blockId).Group("output_key_id,ecosystem").Find(&outputKeys).Error
+	err = GetDB(nil).Raw(`
+SELECT output_key_id,ecosystem FROM "spent_info" WHERE block_id = ? GROUP BY output_key_id,ecosystem
+UNION
+SELECT v2.address AS output_key_id,v2.ecosystem_id AS ecosystem 
+FROM tx_data AS v1 LEFT JOIN log_transactions AS v2 ON(v2.hash = v1.hash) 
+WHERE v1.block = ? AND v1.type = 1 GROUP BY output_key_id,ecosystem
+`, blockId, blockId).Find(&outputKeys).Error
 	return
 }

@@ -34,6 +34,7 @@ func StartDaemons(ctx context.Context) {
 		ExitCh <- fmt.Errorf("Init Spent Info History err:%s\n", err.Error())
 	}
 	sql.InitEcosystemInfo()
+	sql.InitTransactionData()
 
 	go crontab.CreateCrontab()
 }

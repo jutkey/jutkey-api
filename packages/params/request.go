@@ -40,6 +40,11 @@ type SearchTp struct {
 	Search any `json:"search"`
 }
 
+type WalletSearchTp struct {
+	SearchTp
+	WalletTp
+}
+
 //HistoryFindForm example
 type HistoryFindForm struct {
 	GeneralRequest
@@ -105,11 +110,6 @@ func (p *MineHistoryRequest) Validate() error {
 	if err != nil {
 		return err
 	}
-	if p.Order == "" {
-		p.Order = "block DESC"
-	} else {
-		p.Order += ", block DESC"
-	}
 
 	return nil
 }
@@ -165,4 +165,12 @@ func (p *SearchTp) Validate() error {
 		return errors.New("request params search invalid")
 	}
 	return nil
+}
+
+func (p *WalletSearchTp) Validate() error {
+	err := p.WalletTp.Validate()
+	if err != nil {
+		return err
+	}
+	return p.SearchTp.Validate()
 }

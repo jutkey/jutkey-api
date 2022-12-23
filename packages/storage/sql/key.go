@@ -42,7 +42,7 @@ func (p *Key) GetEcosystemKeys(ecoId, keyId int64) (bool, error) {
 	return isFound(GetDB(nil).Where("id = ? and ecosystem = ?", keyId, ecoId).First(p))
 }
 
-func (key *Key) GetEcosystemsKeyAmount(keyId int64, page, limit int, order string, search any) (*EcosystemKeyTotalResult, error) {
+func (key *Key) GetEcosystemsKeyAmount(keyId int64, page, limit int, search any, ids []int64) (*EcosystemKeyTotalResult, error) {
 	var (
 		list  []keyEcosystem
 		rss   []EcosystemKeyTotalRet
@@ -51,11 +51,6 @@ func (key *Key) GetEcosystemsKeyAmount(keyId int64, page, limit int, order strin
 	rets := new(EcosystemKeyTotalResult)
 	rets.Page = page
 	rets.Limit = limit
-	if len(order) == 0 {
-		order = "ecosystem asc,k1.id asc"
-	} else {
-		order = "ecosystem asc," + order
-	}
 	if page == 0 {
 		page = 1
 	}
@@ -78,10 +73,29 @@ func (key *Key) GetEcosystemsKeyAmount(keyId int64, page, limit int, order strin
 			return rets, errors.New("request params invalid")
 		}
 	}
+	var idsWhere string
+	for k, v := range ids {
+		if k == 0 {
+			idsWhere += strconv.FormatInt(v, 10)
+		} else {
+			idsWhere += "," + strconv.FormatInt(v, 10)
+		}
+	}
+	if idsWhere != "" {
+		where += fmt.Sprintf(" ecosystem NOT IN(%s)", idsWhere)
+	}
 	if len(where) > 0 {
 		err := GetDB(nil).Raw(fmt.Sprintf(`
 	SELECT count(*) FROM "1_keys" as k1 LEFT JOIN "1_ecosystems" AS e1 ON(e1.id = k1.ecosystem AND k1.id = ?) WHERE token_symbol <> '' AND %s
 `, where), keyId).Count(&rets.Total).Error
+		if err != nil {
+			return rets, err
+		}
+
+		err = GetDB(nil).Raw(fmt.Sprintf(`
+	SELECT * FROM "1_keys" as k1 LEFT JOIN "1_ecosystems" AS e1 ON(e1.id = k1.ecosystem AND k1.id = ?) WHERE token_symbol <> '' AND %s
+ORDER BY ecosystem asc,k1.id asc OFFSET ? LIMIT ?
+`, where), keyId, (page-1)*limit, limit).Find(&list).Error
 		if err != nil {
 			return rets, err
 		}
@@ -92,21 +106,11 @@ func (key *Key) GetEcosystemsKeyAmount(keyId int64, page, limit int, order strin
 		if err != nil {
 			return rets, err
 		}
-	}
 
-	if len(where) > 0 {
-		err := GetDB(nil).Raw(fmt.Sprintf(`
-	SELECT * FROM "1_keys" as k1 LEFT JOIN "1_ecosystems" AS e1 ON(e1.id = k1.ecosystem AND k1.id = ?) WHERE token_symbol <> '' AND %s
-ORDER BY %s OFFSET ? LIMIT ?
-`, where, order), keyId, (page-1)*limit, limit).Find(&list).Error
-		if err != nil {
-			return rets, err
-		}
-	} else {
-		err := GetDB(nil).Raw(fmt.Sprintf(`
+		err = GetDB(nil).Raw(`
 	SELECT * FROM "1_keys" as k1 LEFT JOIN "1_ecosystems" AS e1 ON(e1.id = k1.ecosystem AND k1.id = ?) WHERE token_symbol <> ''
-ORDER BY %s OFFSET ? LIMIT ?
-`, order), keyId, (page-1)*limit, limit).Find(&list).Error
+ORDER BY ecosystem asc,k1.id asc OFFSET ? LIMIT ?
+`, keyId, (page-1)*limit, limit).Find(&list).Error
 		if err != nil {
 			return rets, err
 		}
@@ -123,12 +127,11 @@ ORDER BY %s OFFSET ? LIMIT ?
 	return rets, nil
 }
 
+func escape(value any) string {
+	return strings.Replace(fmt.Sprint(value), `'`, `''`, -1)
+}
+
 func (m *keyEcosystem) ChangeResults(keyId int64) (*EcosystemKeyTotalRet, error) {
-
-	escape := func(value any) string {
-		return strings.Replace(fmt.Sprint(value), `'`, `''`, -1)
-	}
-
 	var spent SpentInfo
 	utxoAmount, err := spent.GetAmountByKeyId(keyId, m.Key.Ecosystem)
 	if err != nil {
@@ -199,7 +202,6 @@ func (m *keyEcosystem) ChangeResults(keyId int64) (*EcosystemKeyTotalRet, error)
 	//}
 	if f1 {
 		if mb.ImageID != nil {
-			s.MemberName = mb.MemberName
 			s.MemberImageID = *mb.ImageID
 			s.MemberInfo = mb.MemberInfo
 			if s.MemberImageID != 0 {

@@ -6,9 +6,9 @@ import (
 )
 
 type MyAssignBalanceResult struct {
-	Show    bool   `json:"show"`
 	Amount  string `json:"amount"`
 	Balance string `json:"balance"`
+	Show    bool   `json:"show"`
 }
 
 type KeyEcosystemInfo struct {

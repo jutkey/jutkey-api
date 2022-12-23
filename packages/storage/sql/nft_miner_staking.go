@@ -42,7 +42,7 @@ func (p *NftMinerStaking) GetNftMinerStakeInfo(search any, page, limit int, orde
 	switch reflect.TypeOf(search).String() {
 	case "string":
 		var item NftMinerItems
-		f, err := item.GetByTokenHash(search.(string))
+		f, err := item.GetByTokenHash(search.(string), wallet)
 		if err != nil {
 			log.WithFields(log.Fields{"search type": reflect.TypeOf(search).String()}).Warn("Get Nft Miner Stake Info  Failed")
 			return nil, err

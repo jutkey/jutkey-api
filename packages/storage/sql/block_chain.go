@@ -50,3 +50,22 @@ func (b *Block) GetSystemTime() (int64, error) {
 func (b *Block) GetId(blockId int64) (bool, error) {
 	return isFound(GetDB(nil).Where("id = ?", blockId).First(b))
 }
+
+// GetBlockData is retrieving chain of blocks from database
+func GetBlockData(startId int64, endId int64, order string) (*[]Block, error) {
+	var err error
+	blockchain := new([]Block)
+
+	orderStr := "id " + string(order)
+	query := GetDB(nil).Model(&Block{}).Order(orderStr)
+	if endId > 0 {
+		query = query.Select("id,time,data").Where("id > ? AND id <= ?", startId, endId).Find(&blockchain)
+	} else {
+		query = query.Select("id,time,data").Where("id > ?", startId).Find(&blockchain)
+	}
+
+	if query.Error != nil {
+		return nil, err
+	}
+	return blockchain, nil
+}

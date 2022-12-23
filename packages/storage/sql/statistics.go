@@ -36,7 +36,7 @@ func GetStatisticsData() error {
 	}
 
 	if NftMinerReady {
-		err := GetDB(nil).Table("1_nft_miner_items").Where("merge_status = ? ", 1).Count(&data.NftMinerCount).Error
+		err := GetDB(nil).Table("1_nft_miner_items").Where("merge_status = 1").Count(&data.NftMinerCount).Error
 		if err != nil {
 			return err
 		}
@@ -155,4 +155,5 @@ func (p *Statistics) SendWebsocket(channel string, cmd string) error {
 func InitGlobalSwitch() {
 	NodeReady = CandidateTableExist()
 	NftMinerReady = NftMinerTableIsExist()
+	AirdropReady = AirdropTableExist()
 }

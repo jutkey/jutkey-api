@@ -123,6 +123,9 @@ func Run(host string) (err error) {
 	rte.POST("/nft_miner_staking", getNftMinerStakingHandler)
 	rte.POST("/nft_miner_reward", getNftMinerRewardHandler)
 	rte.GET("/nft_miner_file/:id", getNftMinerFileHandler)
+	rte.POST("/nft_miner_synthesizable", getNftMinerSynthesizableHandler)
+	rte.GET("/nft_miner_synthesis_info/:txHash", getNftMinerSynthesisInfoHandler)
+	rte.GET("/nft_miner_transfer_info/:id/:source/:target", getNftMinerTransferInfoHandler)
 
 	//user-center
 	rte.POST("/history", getHistoryHandler)
@@ -139,6 +142,10 @@ func Run(host string) (err error) {
 	rte.POST("/node_block_list", getNodeBlockListHandler)
 	rte.POST("/node_vote_history", getNodeVoteHistoryHandler)
 	rte.POST("/node_substitute_history", getNodeSubstituteHistoryHandler)
+
+	//airdrop
+	rte.GET("/airdrop_info/:wallet", GetAirdropInfoHandler)
+	rte.GET("/airdrop_balance/:wallet", GetAirdropBalanceHandler)
 
 	//other
 	rte.GET(`/get_attachment/:hash`, getAttachmentHandler)

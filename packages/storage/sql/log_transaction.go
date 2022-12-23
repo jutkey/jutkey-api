@@ -17,3 +17,7 @@ func (m LogTransaction) TableName() string {
 func (lt *LogTransaction) GetByHash(hash []byte) (bool, error) {
 	return isFound(GetDB(nil).Where("hash = ?", hash).First(lt))
 }
+
+func (lt *LogTransaction) GetTxTime(hash []byte) (bool, error) {
+	return isFound(GetDB(nil).Select("timestamp").Where("hash = ?", hash).First(lt))
+}

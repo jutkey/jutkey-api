@@ -9,6 +9,7 @@ import (
 	"github.com/IBAX-io/go-ibax/packages/storage/sqldb"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"github.com/shopspring/decimal"
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 	"jutkey-server/packages/params"
@@ -21,21 +22,21 @@ func getMyAssignBalanceHandler(c *gin.Context) {
 	ret := &Response{}
 	keyId := converter.StringToAddress(wallet)
 	if keyId == 0 {
-		log.WithFields(log.Fields{"type": consts.ConversionError, "value": wallet}).Error("converting wallet to address")
+		log.WithFields(log.Fields{"type": consts.ConversionError, "value": wallet}).Error("assign balance converting wallet to address")
 		ret.Return(nil, CodeRequestformat.Errorf(errors.New("request params wallet invalid:"+wallet)))
 		JsonResponse(c, ret)
 		return
 	}
 
-	assign := &sql.AssignGetInfo{}
+	assign := &sql.AssignInfo{}
 	if !sql.HasTable(assign) {
 		ret.Return(nil, CodeSuccess)
 		JsonResponse(c, ret)
 		return
 	}
-	fg, balance, totalBalance, err := assign.GetBalance(nil, keyId)
+	show, balance, totalBalance, err := assign.GetBalance(nil, wallet)
 	if err != nil {
-		log.WithFields(log.Fields{"type": consts.DBError, "error": err}).Error("getting Key for wallet")
+		log.WithFields(log.Fields{"type": consts.DBError, "error": err}).Error("assign get balance")
 		if err == gorm.ErrRecordNotFound {
 			ret.Return(nil, CodeSuccess)
 		} else {
@@ -44,11 +45,14 @@ func getMyAssignBalanceHandler(c *gin.Context) {
 		JsonResponse(c, ret)
 		return
 	}
+	if balance.Equal(decimal.Zero) && totalBalance.Equal(decimal.Zero) {
+		show = false
+	}
 
 	ret.Return(sql.MyAssignBalanceResult{
-		Show:    fg,
 		Amount:  balance.String(),
 		Balance: totalBalance.String(),
+		Show:    show,
 	}, CodeSuccess)
 	JsonResponse(c, ret)
 }

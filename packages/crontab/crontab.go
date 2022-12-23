@@ -30,6 +30,7 @@ const (
 	getStatisticsData
 	syncSpentInfoHistory
 	syncEcosystemInfo
+	syncUtxoTxData
 )
 
 //delay
@@ -47,6 +48,7 @@ func (p *crontab) crontabMain() {
 		r4Task = &task{cmd: getStatisticsData, getDataOver: true}
 		r5Task = &task{cmd: syncSpentInfoHistory, getDataOver: true}
 		r6Task = &task{cmd: syncEcosystemInfo, getDataOver: true}
+		r7Task = &task{cmd: syncUtxoTxData, getDataOver: true}
 
 		d1Task = &task{cmd: getHonorNode, getDataOver: true}
 		d2Task = &task{cmd: loadContracts, getDataOver: true}
@@ -62,6 +64,7 @@ func (p *crontab) crontabMain() {
 				go r4Task.startUpRealTimeTask()
 				go r5Task.startUpRealTimeTask()
 				go r6Task.startUpRealTimeTask()
+				go r7Task.startUpRealTimeTask()
 			case delay:
 				go d1Task.startUpDelayTask()
 				go d2Task.startUpDelayTask()
@@ -109,6 +112,8 @@ func (rk *task) startUpRealTimeTask() {
 		}
 	case syncEcosystemInfo:
 		sql.SyncEcosystemInfo()
+	case syncUtxoTxData:
+		sql.SendTxDataSyncSignal()
 	}
 }
 

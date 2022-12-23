@@ -49,7 +49,7 @@ func getHonorNodeListHandler(c *gin.Context) {
 		return
 	}
 
-	rets, err := sql.NodeListSearch(req.Page, req.Limit, req.Order, req.Wallet)
+	rets, err := sql.NodeListSearch(req.Page, req.Limit, req.Wallet)
 	if err != nil {
 		ret.ReturnFailureString(err.Error())
 		JsonResponse(c, ret)
