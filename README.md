@@ -1,2 +1,2 @@
-# jutkey-server
+# jutkey-api
 
